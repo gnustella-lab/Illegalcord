@@ -62,9 +62,9 @@ export default definePlugin({
             }
         },
         {
-            find: "#{intl::ACCOUNT_SPEAKING_WHILE_MUTED}",
+            find: ".StreamPreviewIntro", // Stream settings modal
             replacement: {
-                match: /className:\i\.buttons,.{0,50}children:\[/,
+                match: /className:\i\.buttons,.{0,100}children:\[/,
                 replace: "$&$self.screenshareSettingsButton(),"
             }
         }
