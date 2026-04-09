@@ -21,6 +21,7 @@ import {
 } from "@webpack/common";
 
 const SelectedChannelStore = findStoreLazy("SelectedChannelStore");
+const PermissionStore = findStoreLazy("PermissionStore");
 const logger = new Logger("StaffDetector");
 const currentChannelStaff = new Set<string>();
 
@@ -337,7 +338,32 @@ const PERM_CHECKS: Array<[keyof typeof settings.store, bigint]> = [
 function isUserStaff(userId: string, guildId: string): boolean {
     const guild = GuildStore.getGuild(guildId);
     if (!guild) return false;
+
+    // Owner check — sempre affidabile
     if (guild.ownerId === userId) return true;
+
+    // Prova prima con PermissionStore (permessi già calcolati da Discord, non dipende dalla cache dei ruoli)
+    try {
+        const computed: bigint | undefined = PermissionStore.getGuildPermissionsForUser?.(userId, guildId);
+        if (computed !== undefined && computed !== null) {
+            for (let i = 0; i < PERM_CHECKS.length; i++) {
+                const [key, perm] = PERM_CHECKS[i];
+                if (settings.store[key] && (BigInt(computed) & perm) !== 0n) return true;
+            }
+            return false;
+        }
+    } catch (e) {
+        if (settings.store.enableLogs) logger.warn("StaffDetector: PermissionStore fallback attivato per", userId, e);
+    }
+
+    // Fallback: calcolo manuale dai ruoli in cache
+    // Funziona solo se GuildMemberStore ha già i dati del membro
+    const member = GuildMemberStore.getMember(guildId, userId);
+    if (!member?.roles?.length) {
+        if (settings.store.enableLogs) logger.warn(`StaffDetector: dati membro non in cache per ${userId} in ${guildId}, impossibile verificare permessi`);
+        return false;
+    }
+
     for (let i = 0; i < PERM_CHECKS.length; i++) {
         const [key, perm] = PERM_CHECKS[i];
         if (settings.store[key] && memberHasPerm(guildId, userId, perm)) return true;
