@@ -25,9 +25,14 @@ interface IMessageCreate {
     message: Message;
 }
 
-const urlRegex = /https?:\/\/[^\s<>"{}|\\^`\[\]]+/gi;
+const urlRegex = /(?:https?:\/\/)?(?:www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&//=]*)/gi;
 
 const settings = definePluginSettings({
+    enableDebugLogs: {
+        type: OptionType.BOOLEAN,
+        description: "Enable detailed debug logging in console",
+        default: false
+    },
     blockMessage: {
         type: OptionType.BOOLEAN,
         description: "Delete the message containing scam links",
@@ -43,7 +48,9 @@ const settings = definePluginSettings({
 async function fetchScamList(): Promise<void> {
     const now = Date.now();
     if (now - lastFetchTime < CACHE_DURATION && scamLinks.size > 0) {
-        logger.debug(`Using cached scam list (${scamLinks.size} domains, expires in ${Math.round((CACHE_DURATION - (now - lastFetchTime)) / 1000 / 60)} minutes)`);
+        if (settings.store.enableDebugLogs) {
+            logger.debug(`Using cached scam list (${scamLinks.size} domains, expires in ${Math.round((CACHE_DURATION - (now - lastFetchTime)) / 1000 / 60)} minutes)`);
+        }
         return;
     }
 
@@ -74,16 +81,32 @@ function extractDomains(content: string): string[] {
     const urls = content.match(urlRegex) || [];
     const domains: string[] = [];
 
-    logger.debug(`Found ${urls.length} URL(s) in message:`, urls);
+    if (settings.store.enableDebugLogs) {
+        logger.debug(`Found ${urls.length} URL(s) in message:`, urls);
+    }
 
     for (const url of urls) {
         try {
-            const cleanedUrl = url.replace(/[)>.,;:!?'"]+$/, "");
+            let cleanedUrl = url.replace(/[)>.,;:!?'"]+$/, "");
+            
+            // Add protocol if missing for URL parsing
+            if (!cleanedUrl.startsWith('http://') && !cleanedUrl.startsWith('https://')) {
+                cleanedUrl = 'https://' + cleanedUrl;
+            }
+            
             const hostname = new URL(cleanedUrl).hostname.toLowerCase();
-            domains.push(hostname);
-            logger.debug(`Extracted domain: ${hostname} from ${url}`);
+            
+            // Remove www. prefix if present
+            const domain = hostname.replace(/^www\./, '');
+            
+            domains.push(domain);
+            if (settings.store.enableDebugLogs) {
+                logger.debug(`Extracted domain: ${domain} from ${url}`);
+            }
         } catch (error) {
-            logger.debug(`Failed to parse URL: ${url}`, error);
+            if (settings.store.enableDebugLogs) {
+                logger.debug(`Failed to parse URL: ${url}`, error);
+            }
             continue;
         }
     }
@@ -93,19 +116,25 @@ function extractDomains(content: string): string[] {
 
 function checkForScamLinks(content: string): string[] {
     if (!content) {
-        logger.debug("Message has no content, skipping");
+        if (settings.store.enableDebugLogs) {
+            logger.debug("Message has no content, skipping");
+        }
         return [];
     }
     
     if (scamLinks.size === 0) {
-        logger.debug("Scam list is empty, skipping check");
+        if (settings.store.enableDebugLogs) {
+            logger.debug("Scam list is empty, skipping check");
+        }
         return [];
     }
 
     const domains = extractDomains(content);
     
     if (domains.length === 0) {
-        logger.debug("No domains extracted from message");
+        if (settings.store.enableDebugLogs) {
+            logger.debug("No domains extracted from message");
+        }
         return [];
     }
 
@@ -116,7 +145,9 @@ function checkForScamLinks(content: string): string[] {
             detectedScams.push(domain);
             logger.warn(`⚠️ MATCH FOUND: ${domain} is in the scam database!`);
         } else {
-            logger.debug(`✓ ${domain} is not in scam database`);
+            if (settings.store.enableDebugLogs) {
+                logger.debug(`✓ ${domain} is not in scam database`);
+            }
         }
     }
 
@@ -136,14 +167,18 @@ export default definePlugin({
             if (!message.content) return;
             if (message.author?.bot) return;
 
-            logger.debug(`Processing message from ${message.author.username}#${message.author.discriminator} in channel ${channelId}`);
+            if (settings.store.enableDebugLogs) {
+                logger.debug(`Processing message from ${message.author.username}#${message.author.discriminator} in channel ${channelId}`);
+            }
 
             await fetchScamList();
 
             const scamDomains = checkForScamLinks(message.content);
 
             if (scamDomains.length === 0) {
-                logger.debug("No scam links detected in message");
+                if (settings.store.enableDebugLogs) {
+                    logger.debug("No scam links detected in message");
+                }
                 return;
             }
 
