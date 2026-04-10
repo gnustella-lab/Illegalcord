@@ -6,7 +6,7 @@
 
 
 import { definePluginSettings } from "@api/Settings";
-import { sendBotMessage } from "@api/Commands";
+import { ApplicationCommandInputType, sendBotMessage } from "@api/Commands";
 import { registerCommand } from "@api/Commands";
 import { addMessagePreSendListener, removeMessagePreSendListener, MessageSendListener } from "@api/MessageEvents";
 import { ChatBarButton, ChatBarButtonFactory } from "@api/ChatButtons";
@@ -543,6 +543,7 @@ export default definePlugin({
         {
             name: "decrypt",
             description: "Decrypt an encrypted message by replying to it or pasting the encrypted text",
+            inputType: ApplicationCommandInputType.BUILT_IN,
             predicate: () => settings.store.pluginActivated,
             options: [
                 {
