@@ -43,13 +43,14 @@ const settings = definePluginSettings({
 async function fetchScamList(): Promise<void> {
     const now = Date.now();
     if (now - lastFetchTime < CACHE_DURATION && scamLinks.size > 0) {
+        logger.debug(`Using cached scam list (${scamLinks.size} domains, expires in ${Math.round((CACHE_DURATION - (now - lastFetchTime)) / 1000 / 60)} minutes)`);
         return;
     }
 
     try {
         logger.info("Fetching scam link database...");
         const response = await fetch(SCAM_LIST_URL);
-
+        
         if (!response.ok) {
             logger.error(`Failed to fetch scam list: ${response.status} ${response.statusText}`);
             return;
@@ -62,8 +63,8 @@ async function fetchScamList(): Promise<void> {
 
         scamLinks = new Set(lines);
         lastFetchTime = now;
-
-        logger.info(`Loaded ${scamLinks.size} scam domains`);
+        
+        logger.info(`Successfully loaded ${scamLinks.size} scam domains from AntiScam database`);
     } catch (error) {
         logger.error("Error fetching scam list:", error);
     }
@@ -73,12 +74,16 @@ function extractDomains(content: string): string[] {
     const urls = content.match(urlRegex) || [];
     const domains: string[] = [];
 
+    logger.debug(`Found ${urls.length} URL(s) in message:`, urls);
+
     for (const url of urls) {
         try {
             const cleanedUrl = url.replace(/[)>.,;:!?'"]+$/, "");
             const hostname = new URL(cleanedUrl).hostname.toLowerCase();
             domains.push(hostname);
-        } catch {
+            logger.debug(`Extracted domain: ${hostname} from ${url}`);
+        } catch (error) {
+            logger.debug(`Failed to parse URL: ${url}`, error);
             continue;
         }
     }
@@ -87,14 +92,31 @@ function extractDomains(content: string): string[] {
 }
 
 function checkForScamLinks(content: string): string[] {
-    if (!content || scamLinks.size === 0) return [];
+    if (!content) {
+        logger.debug("Message has no content, skipping");
+        return [];
+    }
+    
+    if (scamLinks.size === 0) {
+        logger.debug("Scam list is empty, skipping check");
+        return [];
+    }
 
     const domains = extractDomains(content);
+    
+    if (domains.length === 0) {
+        logger.debug("No domains extracted from message");
+        return [];
+    }
+
     const detectedScams: string[] = [];
 
     for (const domain of domains) {
         if (scamLinks.has(domain)) {
             detectedScams.push(domain);
+            logger.warn(`⚠️ MATCH FOUND: ${domain} is in the scam database!`);
+        } else {
+            logger.debug(`✓ ${domain} is not in scam database`);
         }
     }
 
@@ -114,31 +136,42 @@ export default definePlugin({
             if (!message.content) return;
             if (message.author?.bot) return;
 
+            logger.debug(`Processing message from ${message.author.username}#${message.author.discriminator} in channel ${channelId}`);
+
             await fetchScamList();
 
             const scamDomains = checkForScamLinks(message.content);
 
-            if (scamDomains.length === 0) return;
+            if (scamDomains.length === 0) {
+                logger.debug("No scam links detected in message");
+                return;
+            }
 
-            logger.warn(`Detected scam links from ${message.author.username}#${message.author.discriminator} in channel ${channelId}: ${scamDomains.join(", ")}`);
+            logger.warn(`🚨 SCAM LINKS DETECTED! Found ${scamDomains.length} scam domain(s): ${scamDomains.join(", ")}`);
+            logger.warn(`Author: ${message.author.username}#${message.author.discriminator} (${message.author.id})`);
+            logger.warn(`Channel: ${channelId}`);
+            logger.warn(`Message content: ${message.content}`);
 
             const domainList = scamDomains.map(d => `\`${d}\``).join(", ");
             const warningMessage = `⚠️ **Scam Link Detected**\n\nThis message from **${message.author.username}** contains known scam/malicious links:\n${domainList}\n\nThese domains are flagged in the Discord AntiScam database. Do not click them!`;
 
             if (settings.store.blockMessage) {
                 try {
+                    logger.info(`Attempting to delete scam message ${message.id}...`);
                     await fetch(`/api/v9/channels/${channelId}/messages/${message.id}`, {
                         method: "DELETE"
                     });
-                    logger.info(`Deleted scam message ${message.id} from ${message.author.username}`);
+                    logger.info(`✅ Successfully deleted scam message ${message.id}`);
                 } catch (error) {
-                    logger.error("Failed to delete scam message:", error);
+                    logger.error("❌ Failed to delete scam message:", error);
                 }
             }
 
+            logger.info("Sending Clyde warning message...");
             sendBotMessage(channelId, {
                 content: warningMessage
             });
+            logger.info("✅ Clyde warning message sent successfully");
         }
     },
 
