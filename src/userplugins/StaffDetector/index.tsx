@@ -302,24 +302,31 @@ function memberHasPerm(guildId: string, userId: string, perm: bigint): boolean {
     const guild = GuildStore.getGuild(guildId);
     if (!guild) return false;
     if (guild.ownerId === userId) return true;
-    // FIX: guard against roles map not being loaded yet
-    if (!guild.roles) return false;
+    
     const member = GuildMemberStore.getMember(guildId, userId);
-    if (!member?.roles) return false;
-    const roles = member.roles;
-    for (let i = 0; i < roles.length; i++) {
-        const role = guild.roles[roles[i]];
-        if (!role) continue;
+    if (!member?.roles?.length) return false;
+    
+    const sortedRoles = GuildRoleStore.getSortedRoles(guildId);
+    if (!sortedRoles || sortedRoles.length === 0) return false;
+    
+    const userRoleIds = new Set(member.roles);
+    
+    for (let i = 0; i < sortedRoles.length; i++) {
+        const role = sortedRoles[i];
+        if (!userRoleIds.has(role.id)) continue;
+        
         const perms = BigInt(role.permissions);
         if ((perms & PermissionsBits.ADMINISTRATOR) !== 0n) return true;
         if ((perms & perm) !== 0n) return true;
     }
-    const everyoneRole = guild.roles[guildId];
+    
+    const everyoneRole = GuildRoleStore.getRole(guildId, guildId);
     if (everyoneRole) {
         const perms = BigInt(everyoneRole.permissions);
         if ((perms & PermissionsBits.ADMINISTRATOR) !== 0n) return true;
         if ((perms & perm) !== 0n) return true;
     }
+    
     return false;
 }
 
@@ -342,10 +349,8 @@ function isUserStaff(userId: string, guildId: string): boolean {
     const guild = GuildStore.getGuild(guildId);
     if (!guild) return false;
 
-    // Owner check — sempre affidabile
     if (guild.ownerId === userId) return true;
 
-    // Prova prima con PermissionStore (permessi già calcolati da Discord, non dipende dalla cache dei ruoli)
     try {
         const computed: bigint | undefined = PermissionStore.getGuildPermissionsForUser?.(userId, guildId);
         if (computed !== undefined && computed !== null) {
@@ -356,21 +361,37 @@ function isUserStaff(userId: string, guildId: string): boolean {
             return false;
         }
     } catch (e) {
-        if (settings.store.enableLogs) logger.warn("StaffDetector: PermissionStore fallback attivato per", userId, e);
+        if (settings.store.enableLogs) logger.warn("StaffDetector: PermissionStore error, using GuildRoleStore:", e);
     }
 
-    // Fallback: calcolo manuale dai ruoli in cache
-    // Funziona solo se GuildMemberStore ha già i dati del membro
     const member = GuildMemberStore.getMember(guildId, userId);
     if (!member?.roles?.length) {
-        if (settings.store.enableLogs) logger.warn(`StaffDetector: dati membro non in cache per ${userId} in ${guildId}, impossibile verificare permessi`);
+        if (settings.store.enableLogs) logger.info(`StaffDetector: no roles for ${userId} in ${guildId}`);
         return false;
     }
 
+    const sortedRoles = GuildRoleStore.getSortedRoles(guildId);
+    if (!sortedRoles || sortedRoles.length === 0) {
+        if (settings.store.enableLogs) logger.info(`StaffDetector: GuildRoleStore empty for ${guildId}`);
+        return false;
+    }
+
+    const userRoleIds = new Set(member.roles);
+    
     for (let i = 0; i < PERM_CHECKS.length; i++) {
         const [key, perm] = PERM_CHECKS[i];
-        if (settings.store[key] && memberHasPerm(guildId, userId, perm)) return true;
+        if (!settings.store[key]) continue;
+        
+        for (let j = 0; j < sortedRoles.length; j++) {
+            const role = sortedRoles[j];
+            if (!userRoleIds.has(role.id)) continue;
+            
+            const rolePerms = BigInt(role.permissions);
+            if ((rolePerms & PermissionsBits.ADMINISTRATOR) !== 0n) return true;
+            if ((rolePerms & perm) !== 0n) return true;
+        }
     }
+    
     return false;
 }
 
