@@ -27,6 +27,7 @@ Our included plugins can be found [here](https://equicord.org/plugins).
 - **FakeMuteAndDeafen**
 - **BetterMic**
 - **BetterScreenshare**
+- **StaffDetector**
 - **BigFileUpload**
 - **Stalker**
 - **Securecord** | (AES 256 on messages)
