@@ -12,24 +12,47 @@ import { OptionType } from "@utils/types";
 
 // Plugin settings
 const settings = definePluginSettings({
+  mullvadServer: {
+    type: OptionType.SELECT,
+    description: "Mullvad DNS server to use",
+    options: [
+      { label: "Base DNS (no filtering)", value: "dns.mullvad.net", default: true },
+      { label: "Adblock (ads + trackers)", value: "adblock.dns.mullvad.net" },
+      { label: "Base (ads + trackers + malware)", value: "base.dns.mullvad.net" },
+      { label: "Extended (+ social media)", value: "extended.dns.mullvad.net" },
+      { label: "Family (+ adult + gambling)", value: "family.dns.mullvad.net" },
+      { label: "All (everything blocked)", value: "all.dns.mullvad.net" }
+    ],
+    default: "dns.mullvad.net"
+  },
   enableLogging: {
     type: OptionType.BOOLEAN,
-    description: "Enable detailed logging",
+    description: "Enable detailed logging.",
     default: true
   },
   showNotifications: {
     type: OptionType.BOOLEAN,
-    description: "Show toast notifications for DNS resolutions",
+    description: "Show toast notifications for DNS resolutions.",
+    default: true
+  },
+  patchWebSocket: {
+    type: OptionType.BOOLEAN,
+    description: "Patch WebSocket connections for Discord gateway.",
+    default: true
+  },
+  bypassCDN: {
+    type: OptionType.BOOLEAN,
+    description: "Bypass CDN domains for better performance.",
     default: true
   },
   autoStart: {
     type: OptionType.BOOLEAN,
-    description: "Auto-start plugin on load",
+    description: "Auto-start plugin on load.",
     default: true
   },
   logLevel: {
     type: OptionType.SELECT,
-    description: "Logging level",
+    description: "Logging level.",
     options: [
       { label: "Verbose", value: "verbose" },
       { label: "Info", value: "info" },
@@ -63,13 +86,18 @@ export default definePlugin({
 
     // Official Mullvad DNS servers (DoH/DoT supported)
     // Source: https://mullvad.net/en/help/dns-over-https-and-dns-over-tls
-    const MULLVAD_DNS_SERVERS = {
+    const MULLVAD_DNS_SERVERS: Record<string, string> = {
       "dns.mullvad.net": "194.242.2.2",                    // Base DNS (no content blocking)
       "adblock.dns.mullvad.net": "194.242.2.3",            // Ads + Trackers blocking
       "base.dns.mullvad.net": "194.242.2.4",               // Ads + Trackers + Malware blocking
       "extended.dns.mullvad.net": "194.242.2.5",           // Ads + Trackers + Malware + Social media blocking
       "family.dns.mullvad.net": "194.242.2.6",             // Ads + Trackers + Malware + Adult + Gambling blocking
       "all.dns.mullvad.net": "194.242.2.9"                 // All content blocking
+    };
+
+    // Get selected Mullvad server IP
+    const getSelectedMullvadIP = (): string => {
+      return MULLVAD_DNS_SERVERS[settings.store.mullvadServer] || MULLVAD_DNS_SERVERS["dns.mullvad.net"];
     };
 
     // Discord services will use Mullvad DNS resolution
@@ -84,15 +112,25 @@ export default definePlugin({
       "discordapp.net"
     ];
 
+    // CDN domains to bypass for better performance
+    const CDN_DOMAINS = [
+      "cdn.discordapp.com",
+      "media.discordapp.net",
+      "images-ext-1.discordapp.net",
+      "images-ext-2.discordapp.net"
+    ];
+
     // State management
     const originalFetch = window.fetch;
+    const originalWebSocket = window.WebSocket;
     let isActive = false;
     const dnsCache = new Map();
     const statistics = {
       totalRequests: 0,
       successfulResolutions: 0,
       failedResolutions: 0,
-      cacheHits: 0
+      cacheHits: 0,
+      webSocketConnections: 0
     };
 
     // Advanced logger with colors and levels
@@ -188,8 +226,8 @@ export default definePlugin({
       );
 
       if (isDiscordDomain) {
-        // Use Mullvad DNS server for resolution
-        const mullvadServer = MULLVAD_DNS_SERVERS["dns.mullvad.net"];
+        // Use selected Mullvad DNS server for resolution
+        const mullvadServer = getSelectedMullvadIP();
         dnsCache.set(hostname, mullvadServer);
         log.verbose(`Cached Discord domain: ${hostname} -> ${mullvadServer} (Mullvad DNS)`);
         return mullvadServer;
@@ -223,23 +261,33 @@ export default definePlugin({
           if (url.hostname.includes("discord") &&
             !url.hostname.includes("mullvad") &&
             !shouldExcludeURL(url)) {
-            const ip = getDNSRecord(url.hostname);
 
-            if (ip) {
-              // Replace hostname with IP
-              url.hostname = ip;
-              urlStr = url.toString();
+            // Check if we should bypass CDN
+            const isCDN = settings.store.bypassCDN && CDN_DOMAINS.some(cdn =>
+              url.hostname === cdn || url.hostname.endsWith(`.${cdn}`)
+            );
 
-              statistics.successfulResolutions++;
-              log.info(`🔄 Resolved ${url.hostname} -> ${ip} (Mullvad)`);
-
-              // Show notification if enabled
-              if (settings.store.showNotifications) {
-                showNotification(`DNS resolved: ${url.hostname} -> ${ip}`, "success");
-              }
+            if (isCDN) {
+              log.verbose(`Bypassing CDN domain: ${url.hostname}`);
             } else {
-              statistics.failedResolutions++;
-              log.warn(`No DNS record found for ${url.hostname}`);
+              const ip = getDNSRecord(url.hostname);
+
+              if (ip) {
+                // Replace hostname with IP
+                url.hostname = ip;
+                urlStr = url.toString();
+
+                statistics.successfulResolutions++;
+                log.info(`Resolved ${url.hostname} -> ${ip} (Mullvad)`);
+
+                // Show notification if enabled
+                if (settings.store.showNotifications) {
+                  showNotification(`DNS resolved: ${url.hostname} -> ${ip}`, "success");
+                }
+              } else {
+                statistics.failedResolutions++;
+                log.warn(`No DNS record found for ${url.hostname}`);
+              }
             }
           } else {
             if (shouldExcludeURL(url)) {
@@ -263,7 +311,54 @@ export default definePlugin({
         }
       };
 
-      log.info("✅ Fetch patched successfully");
+      log.info("Fetch patched successfully");
+      return true;
+    }
+
+    // WebSocket patch for Discord gateway
+    function patchWebSocket() {
+      if (!settings.store.patchWebSocket) {
+        log.info("WebSocket patching disabled");
+        return true;
+      }
+
+      if (!originalWebSocket) {
+        log.error("Original WebSocket not found!");
+        return false;
+      }
+
+      window.WebSocket = class extends originalWebSocket {
+        constructor(url: string | URL, protocols?: string | string[]) {
+          let patchedUrl = url;
+
+          try {
+            const urlStr = url.toString();
+            const urlObj = new URL(urlStr);
+
+            // Check if this is a Discord WebSocket connection
+            if (urlObj.hostname.includes("discord") && !urlObj.hostname.includes("mullvad")) {
+              const ip = getDNSRecord(urlObj.hostname);
+
+              if (ip) {
+                urlObj.hostname = ip;
+                patchedUrl = urlObj.toString();
+                statistics.webSocketConnections++;
+                log.info(`🔌 WebSocket resolved: ${urlObj.hostname} -> ${ip} (Mullvad)`);
+
+                if (settings.store.showNotifications) {
+                  showNotification(`WebSocket: ${urlObj.hostname} -> ${ip}`, "info");
+                }
+              }
+            }
+          } catch (error) {
+            log.error(`WebSocket patch error: ${error}`);
+          }
+
+          super(patchedUrl, protocols);
+        }
+      };
+
+      log.info("WebSocket patched successfully");
       return true;
     }
 
@@ -305,21 +400,25 @@ export default definePlugin({
         }
 
         try {
-          log.info(`🚀 Starting ${PLUGIN_NAME} v${VERSION}`);
+          log.info(`Starting ${PLUGIN_NAME} v${VERSION}`);
+          log.info(`Using Mullvad server: ${settings.store.mullvadServer} (${getSelectedMullvadIP()})`);
 
           const fetchSuccess = patchFetch();
+          const wsSuccess = patchWebSocket();
 
           if (fetchSuccess) {
             isActive = true;
             showNotification(`${PLUGIN_NAME} activated successfully`, "success");
-            log.info(`✅ Plugin started successfully with ${Object.keys(MULLVAD_DNS_SERVERS).length} Mullvad DNS servers`);
-            log.info(`📋 Monitoring ${DISCORD_DOMAINS.length} Discord domains`);
+            log.info(`Plugin started successfully with ${Object.keys(MULLVAD_DNS_SERVERS).length} Mullvad DNS servers`);
+            log.info(`Monitoring ${DISCORD_DOMAINS.length} Discord domains`);
+            log.info(`WebSocket patch: ${settings.store.patchWebSocket ? "enabled" : "disabled"}`);
+            log.info(`CDN bypass: ${settings.store.bypassCDN ? "enabled" : "disabled"}`);
           } else {
             throw new Error("Failed to patch network functions");
           }
 
         } catch (error) {
-          log.error(`❌ Failed to start plugin: ${error.message}`);
+          log.error(`Failed to start plugin: ${error.message}`);
           showNotification(`${PLUGIN_NAME} failed to start`, "error");
         }
       },
@@ -331,11 +430,16 @@ export default definePlugin({
         }
 
         try {
-          log.info(`🛑 Stopping ${PLUGIN_NAME}`);
+          log.info(`Stopping ${PLUGIN_NAME}`);
 
           if (originalFetch) {
             window.fetch = originalFetch;
-            log.info("🔄 Fetch restored to original");
+            log.info("Fetch restored to original");
+          }
+
+          if (originalWebSocket) {
+            window.WebSocket = originalWebSocket;
+            log.info("WebSocket restored to original");
           }
 
           // Clear cache
@@ -343,10 +447,10 @@ export default definePlugin({
           isActive = false;
 
           showNotification(`${PLUGIN_NAME} deactivated`, "info");
-          log.info("✅ Plugin stopped successfully");
+          log.info("Plugin stopped successfully");
 
         } catch (error) {
-          log.error(`❌ Error stopping plugin: ${error.message}`);
+          log.error(`Error stopping plugin: ${error.message}`);
         }
       },
 
@@ -359,17 +463,18 @@ export default definePlugin({
         cacheEntries: Object.fromEntries(dnsCache)
       }),
       getStatistics: () => ({ ...statistics }),
+      getSelectedServer: () => settings.store.mullvadServer,
       clearStatistics: () => {
         statistics.totalRequests = 0;
         statistics.successfulResolutions = 0;
         statistics.failedResolutions = 0;
         statistics.cacheHits = 0;
-        log.info("📊 Statistics cleared");
+        log.info("Statistics cleared");
       },
       clearCache: () => {
         const size = dnsCache.size;
         dnsCache.clear();
-        log.info(`🧹 Cleared ${size} DNS cache entries`);
+        log.info(`Cleared ${size} DNS cache entries`);
         return size;
       },
       addCustomRecord: (hostname, ip) => {
@@ -405,8 +510,8 @@ export default definePlugin({
     // @ts-ignore
     window.MullvadDNS = MullvadDNS;
 
-    log.info(`📦 ${PLUGIN_NAME} v${VERSION} loaded and ready`);
-    log.info(`📊 Features: Logging=${settings.store.enableLogging}, Notifications=${settings.store.showNotifications}`);
+    log.info(`${PLUGIN_NAME} v${VERSION} loaded and ready`);
+    log.info(`Features: Logging=${settings.store.enableLogging}, Notifications=${settings.store.showNotifications}`);
   },
 
   stop() {
