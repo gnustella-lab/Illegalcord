@@ -17,65 +17,81 @@
 */
 
 import { definePluginSettings } from "@api/Settings";
-import { PluginInfo } from "@plugins/betterMicrophone.desktop/constants";
-import { openMicrophoneSettingsModal } from "@plugins/betterMicrophone.desktop/modals";
-import { MicrophonePatcher } from "@plugins/betterMicrophone.desktop/patchers";
-import { initMicrophoneStore } from "@plugins/betterMicrophone.desktop/stores";
-import { Emitter, MicrophoneSettingsIcon } from "@plugins/philsPluginLibrary";
+import { PluginInfo } from "./constants";
+import { openScreenshareModal } from "./modals";
+import { ScreenshareAudioPatcher, ScreensharePatcher } from "./patchers";
+import { GoLivePanelWrapper, replacedSubmitFunction } from "./patches";
+import { initScreenshareAudioStore, initScreenshareStore } from "./stores";
+import { Emitter, ScreenshareSettingsIcon } from "../philsPluginLibrary";
 import { Devs } from "@utils/constants";
 import definePlugin, { OptionType } from "@utils/types";
 import { findComponentByCodeLazy } from "@webpack";
 
 const Button = findComponentByCodeLazy(".NONE,disabled:", ".PANEL_BUTTON");
 
-function micSettingsButton() {
-    const { hideSettingsIcon } = settings.use(["hideSettingsIcon"]);
-    if (hideSettingsIcon) return null;
+function screenshareSettingsButton() {
+
     return (
         <Button
             tooltipText="Change screenshare settings"
-            icon={MicrophoneSettingsIcon}
+            icon={ScreenshareSettingsIcon}
             role="button"
-            onClick={openMicrophoneSettingsModal}
+            onClick={openScreenshareModal}
         />
     );
 }
 
-const settings = definePluginSettings({
-    hideSettingsIcon: {
-        type: OptionType.BOOLEAN,
-        description: "Hide the settings icon",
-        default: true,
-    }
-});
-
 export default definePlugin({
-    name: "BetterMicrophone",
-    description: "This plugin allows you to further customize your microphone.",
+    name: "BetterScreenshare",
+    description: "This plugin allows you to further customize your screen sharing.",
     authors: [Devs.philhk],
     dependencies: ["PhilsPluginLibrary"],
     patches: [
         {
-            find: "#{intl::ACCOUNT_SPEAKING_WHILE_MUTED}",
+            find: "GoLiveModal: user cannot be undefined", // Module: 60594; canaryRelease: 364525; L431
             replacement: {
-                match: /className:\i\.buttons,.{0,50}children:\[/,
-                replace: "$&$self.micSettingsButton(),"
+                match: /onSubmit:(\w+)/,
+                replace: "onSubmit:$self.replacedSubmitFunction($1)"
+            }
+        },
+        {
+            find: "StreamSettings: user cannot be undefined", // Module: 641115; canaryRelease: 364525; L254
+            replacement: {
+                match: /\(.{0,10}(,{.{0,100}modalContent)/,
+                replace: "($self.GoLivePanelWrapper$1"
+            }
+        },
+        {
+            find: ".StreamPreviewIntro", // Stream settings modal
+            replacement: {
+                match: /className:\i\.buttons,.{0,100}children:\[/,
+                replace: "$&$self.screenshareSettingsButton(),"
             }
         }
     ],
-    settings: settings,
+    settings: definePluginSettings({
+        hideDefaultSettings: {
+            type: OptionType.BOOLEAN,
+            description: "Hide Discord screen sharing settings",
+            default: true,
+        }
+    }),
     start(): void {
-        initMicrophoneStore();
+        initScreenshareStore();
+        initScreenshareAudioStore();
+        this.screensharePatcher = new ScreensharePatcher().patch();
+        this.screenshareAudioPatcher = new ScreenshareAudioPatcher().patch();
 
-        this.microphonePatcher = new MicrophonePatcher().patch();
     },
     stop(): void {
-        this.microphonePatcher?.unpatch();
-
+        this.screensharePatcher?.unpatch();
+        this.screenshareAudioPatcher?.unpatch();
         Emitter.removeAllListeners(PluginInfo.PLUGIN_NAME);
     },
     toolboxActions: {
-        "Open Microphone Settings": openMicrophoneSettingsModal
+        "Open Screenshare Settings": openScreenshareModal
     },
-    micSettingsButton
+    replacedSubmitFunction,
+    GoLivePanelWrapper,
+    screenshareSettingsButton
 });
