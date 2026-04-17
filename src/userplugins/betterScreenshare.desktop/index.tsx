@@ -17,12 +17,12 @@
 */
 
 import { definePluginSettings } from "@api/Settings";
-import { PluginInfo } from "@plugins/betterScreenshare.desktop/constants";
-import { openScreenshareModal } from "@plugins/betterScreenshare.desktop/modals";
-import { ScreenshareAudioPatcher, ScreensharePatcher } from "@plugins/betterScreenshare.desktop/patchers";
-import { GoLivePanelWrapper, replacedSubmitFunction } from "@plugins/betterScreenshare.desktop/patches";
-import { initScreenshareAudioStore, initScreenshareStore } from "@plugins/betterScreenshare.desktop/stores";
-import { Emitter, ScreenshareSettingsIcon } from "@plugins/philsPluginLibrary";
+import { PluginInfo } from "./constants";
+import { openScreenshareModal } from "./modals";
+import { ScreenshareAudioPatcher, ScreensharePatcher } from "./patchers";
+import { GoLivePanelWrapper, replacedSubmitFunction } from "./patches";
+import { initScreenshareAudioStore, initScreenshareStore } from "./stores";
+import { Emitter, ScreenshareSettingsIcon } from "../philsPluginLibrary";
 import { Devs } from "@utils/constants";
 import definePlugin, { OptionType } from "@utils/types";
 import { findComponentByCodeLazy } from "@webpack";
