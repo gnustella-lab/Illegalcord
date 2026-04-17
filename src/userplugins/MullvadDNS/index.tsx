@@ -45,6 +45,25 @@ const settings = definePluginSettings({
     description: "Bypass CDN domains for better performance.",
     default: false
   },
+  dohTimeout: {
+    type: OptionType.NUMBER,
+    description: "DNS over HTTPS timeout in milliseconds.",
+    default: 5000,
+    min: 1000,
+    max: 30000
+  },
+  cacheTTL: {
+    type: OptionType.NUMBER,
+    description: "DNS cache Time-To-Live in seconds.",
+    default: 300,
+    min: 60,
+    max: 3600
+  },
+  enableFallback: {
+    type: OptionType.BOOLEAN,
+    description: "Fallback to original DNS if Mullvad fails.",
+    default: true
+  },
   autoStart: {
     type: OptionType.BOOLEAN,
     description: "Auto-start plugin on load.",
@@ -84,20 +103,20 @@ export default definePlugin({
     const PLUGIN_NAME = "MullvadDNS";
     const VERSION = "1.3.0";
 
-    // Official Mullvad DNS servers (DoH/DoT supported)
+    // Official Mullvad DoH endpoints
     // Source: https://mullvad.net/en/help/dns-over-https-and-dns-over-tls
-    const MULLVAD_DNS_SERVERS: Record<string, string> = {
-      "dns.mullvad.net": "194.242.2.2",                    // Base DNS (no content blocking)
-      "adblock.dns.mullvad.net": "194.242.2.3",            // Ads + Trackers blocking
-      "base.dns.mullvad.net": "194.242.2.4",               // Ads + Trackers + Malware blocking
-      "extended.dns.mullvad.net": "194.242.2.5",           // Ads + Trackers + Malware + Social media blocking
-      "family.dns.mullvad.net": "194.242.2.6",             // Ads + Trackers + Malware + Adult + Gambling blocking
-      "all.dns.mullvad.net": "194.242.2.9"                 // All content blocking
+    const MULLVAD_DOH_ENDPOINTS: Record<string, string> = {
+      "dns.mullvad.net": "https://dns.mullvad.net/dns-query",
+      "adblock.dns.mullvad.net": "https://adblock.dns.mullvad.net/dns-query",
+      "base.dns.mullvad.net": "https://base.dns.mullvad.net/dns-query",
+      "extended.dns.mullvad.net": "https://extended.dns.mullvad.net/dns-query",
+      "family.dns.mullvad.net": "https://family.dns.mullvad.net/dns-query",
+      "all.dns.mullvad.net": "https://all.dns.mullvad.net/dns-query"
     };
 
-    // Get selected Mullvad server IP
-    const getSelectedMullvadIP = (): string => {
-      return MULLVAD_DNS_SERVERS[settings.store.mullvadServer] || MULLVAD_DNS_SERVERS["dns.mullvad.net"];
+    // Get selected Mullvad DoH endpoint
+    const getSelectedDOHEndpoint = (): string => {
+      return MULLVAD_DOH_ENDPOINTS[settings.store.mullvadServer] || MULLVAD_DOH_ENDPOINTS["dns.mullvad.net"];
     };
 
     // Discord services will use Mullvad DNS resolution
@@ -124,13 +143,23 @@ export default definePlugin({
     const originalFetch = window.fetch;
     const originalWebSocket = window.WebSocket;
     let isActive = false;
-    const dnsCache = new Map();
+    
+    // DNS Cache with TTL support
+    interface CacheEntry {
+      ip: string;
+      timestamp: number;
+      ttl: number;
+    }
+    const dnsCache = new Map<string, CacheEntry>();
+    
     const statistics = {
       totalRequests: 0,
-      successfulResolutions: 0,
-      failedResolutions: 0,
+      dohQueries: 0,
       cacheHits: 0,
-      webSocketConnections: 0
+      cacheExpired: 0,
+      fallbacks: 0,
+      webSocketConnections: 0,
+      errors: 0
     };
 
     // Advanced logger with colors and levels
@@ -211,82 +240,145 @@ export default definePlugin({
       return false;
     }
 
-    // Enhanced DNS record lookup with caching
-    function getDNSRecord(hostname) {
-      // Check cache first
-      if (dnsCache.has(hostname)) {
-        statistics.cacheHits++;
-        log.verbose(`Cache hit for ${hostname}: ${dnsCache.get(hostname)}`);
-        return dnsCache.get(hostname);
-      }
+    // DNS over HTTPS resolver
+    async function resolveDNSViaDoH(hostname: string): Promise<string | null> {
+      const dohEndpoint = getSelectedDOHEndpoint();
+      const dohURL = `${dohEndpoint}?name=${hostname}&type=A`;
 
-      // Check if hostname is a Discord domain
-      const isDiscordDomain = DISCORD_DOMAINS.some(domain =>
-        hostname === domain || hostname.endsWith(`.${domain}`)
-      );
+      try {
+        statistics.dohQueries++;
+        
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), settings.store.dohTimeout);
 
-      if (isDiscordDomain) {
-        // Use selected Mullvad DNS server for resolution
-        const mullvadServer = getSelectedMullvadIP();
-        dnsCache.set(hostname, mullvadServer);
-        log.verbose(`Cached Discord domain: ${hostname} -> ${mullvadServer} (Mullvad DNS)`);
-        return mullvadServer;
-      }
+        const response = await fetch(dohURL, {
+          method: "GET",
+          headers: {
+            "Accept": "application/dns-json"
+          },
+          signal: controller.signal
+        });
 
-      // Check if it's a direct Mullvad DNS server hostname
-      const record = MULLVAD_DNS_SERVERS[hostname] || null;
-      if (record) {
-        dnsCache.set(hostname, record);
-        log.verbose(`Cached new record: ${hostname} -> ${record}`);
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          throw new Error(`DoH query failed: ${response.status} ${response.statusText}`);
+        }
+
+        const data = await response.json();
+
+        // Parse DNS response
+        if (data.Status === 0 && data.Answer && data.Answer.length > 0) {
+          const answer = data.Answer.find((a: any) => a.type === 1); // Type 1 = A record
+          if (answer && answer.data) {
+            const ip = answer.data;
+            const ttl = answer.TTL || settings.store.cacheTTL;
+
+            // Cache the result with TTL
+            dnsCache.set(hostname, {
+              ip,
+              timestamp: Date.now(),
+              ttl: ttl * 1000 // Convert to milliseconds
+            });
+
+            log.verbose(`DoH resolved: ${hostname} -> ${ip} (TTL: ${ttl}s)`);
+            return ip;
+          }
+        }
+
+        log.warn(`DoH returned no answer for ${hostname}`);
+        return null;
+
+      } catch (error) {
+        statistics.errors++;
+        
+        if (error instanceof Error && error.name === "AbortError") {
+          log.error(`DoH timeout for ${hostname} (${settings.store.dohTimeout}ms)`);
+        } else {
+          log.error(`DoH error for ${hostname}: ${error}`);
+        }
+
+        // Fallback to original DNS if enabled
+        if (settings.store.enableFallback) {
+          statistics.fallbacks++;
+          log.info(`Fallback to original DNS for ${hostname}`);
+          return null; // Return null to use original hostname
+        }
+
+        return null;
       }
-      return record;
     }
 
-    // Enhanced fetch patch with statistics
+    // Check if cache entry is valid
+    function isCacheValid(entry: CacheEntry): boolean {
+      const now = Date.now();
+      const age = now - entry.timestamp;
+      return age < entry.ttl;
+    }
+
+    // Enhanced DNS record lookup with DoH and TTL cache
+    async function getDNSRecord(hostname: string): Promise<string | null> {
+      statistics.totalRequests++;
+
+      // Check cache first
+      if (dnsCache.has(hostname)) {
+        const entry = dnsCache.get(hostname)!;
+        
+        if (isCacheValid(entry)) {
+          statistics.cacheHits++;
+          log.verbose(`Cache hit: ${hostname} -> ${entry.ip}`);
+          return entry.ip;
+        } else {
+          statistics.cacheExpired++;
+          log.verbose(`Cache expired: ${hostname}`);
+          dnsCache.delete(hostname);
+        }
+      }
+
+      // Check if hostname should bypass DNS resolution
+      const isCDN = settings.store.bypassCDN && CDN_DOMAINS.some(cdn => 
+        hostname === cdn || hostname.endsWith(`.${cdn}`)
+      );
+
+      if (isCDN) {
+        log.verbose(`Bypassing CDN: ${hostname}`);
+        return null; // Use original hostname
+      }
+
+      // Resolve via DoH
+      const ip = await resolveDNSViaDoH(hostname);
+      return ip;
+    }
+
+    // Enhanced fetch patch with DoH
     function patchFetch() {
       if (!originalFetch) {
         log.error("Original fetch not found!");
         return false;
       }
-
-      window.fetch = function (input, init) {
+    
+      window.fetch = async function (input: RequestInfo | URL, init?: RequestInit) {
         try {
           let urlStr = (input instanceof Request) ? input.url : String(input);
           const url = new URL(urlStr);
-
-          // Increment request counter
-          statistics.totalRequests++;
-
+    
           // Check if this is a Discord-related hostname AND not excluded
           if (url.hostname.includes("discord") &&
             !url.hostname.includes("mullvad") &&
             !shouldExcludeURL(url)) {
-
-            // Check if we should bypass CDN
-            const isCDN = settings.store.bypassCDN && CDN_DOMAINS.some(cdn =>
-              url.hostname === cdn || url.hostname.endsWith(`.${cdn}`)
-            );
-
-            if (isCDN) {
-              log.verbose(`Bypassing CDN domain: ${url.hostname}`);
-            } else {
-              const ip = getDNSRecord(url.hostname);
-
-              if (ip) {
-                // Replace hostname with IP
-                url.hostname = ip;
-                urlStr = url.toString();
-
-                statistics.successfulResolutions++;
-                log.info(`Resolved ${url.hostname} -> ${ip} (Mullvad)`);
-
-                // Show notification if enabled
-                if (settings.store.showNotifications) {
-                  showNotification(`DNS resolved: ${url.hostname} -> ${ip}`, "success");
-                }
-              } else {
-                statistics.failedResolutions++;
-                log.warn(`No DNS record found for ${url.hostname}`);
+                
+            const ip = await getDNSRecord(url.hostname);
+    
+            if (ip) {
+              // Replace hostname with resolved IP
+              url.hostname = ip;
+              urlStr = url.toString();
+    
+              log.info(`Resolved ${url.hostname} -> ${ip} (Mullvad DoH)`);
+    
+              // Show notification if enabled
+              if (settings.store.showNotifications) {
+                showNotification(`DNS resolved: ${url.hostname} -> ${ip}`, "success");
               }
             }
           } else {
@@ -296,68 +388,70 @@ export default definePlugin({
               log.verbose(`Skipping non-Discord host: ${url.hostname}`);
             }
           }
-
+    
           // Call original fetch with modified URL
           const request = (input instanceof Request)
             ? new Request(urlStr, input)
             : urlStr;
-
+    
           return originalFetch(request, init);
-
+    
         } catch (error) {
-          statistics.failedResolutions++;
-          log.error(`Fetch patch error: ${error.message}`);
+          statistics.errors++;
+          log.error(`Fetch patch error: ${error}`);
           return originalFetch(input, init);
         }
       };
-
+    
       log.info("Fetch patched successfully");
       return true;
     }
 
-    // WebSocket patch for Discord gateway
-    function patchWebSocket() {
+    // WebSocket patch for Discord gateway with DoH
+    async function patchWebSocket() {
       if (!settings.store.patchWebSocket) {
         log.info("WebSocket patching disabled");
         return true;
       }
-
+    
       if (!originalWebSocket) {
         log.error("Original WebSocket not found!");
         return false;
       }
-
+    
       window.WebSocket = class extends originalWebSocket {
         constructor(url: string | URL, protocols?: string | string[]) {
-          let patchedUrl = url;
-
+          super(url, protocols);
+              
+          // Resolve DNS asynchronously after construction
+          this.resolveDNS(url);
+        }
+    
+        async resolveDNS(url: string | URL) {
           try {
             const urlStr = url.toString();
             const urlObj = new URL(urlStr);
-
+    
             // Check if this is a Discord WebSocket connection
             if (urlObj.hostname.includes("discord") && !urlObj.hostname.includes("mullvad")) {
-              const ip = getDNSRecord(urlObj.hostname);
-
+              const ip = await getDNSRecord(urlObj.hostname);
+    
               if (ip) {
-                urlObj.hostname = ip;
-                patchedUrl = urlObj.toString();
                 statistics.webSocketConnections++;
-                log.info(`🔌 WebSocket resolved: ${urlObj.hostname} -> ${ip} (Mullvad)`);
-
+                log.info(`WebSocket resolved: ${urlObj.hostname} -> ${ip} (Mullvad DoH)`);
+    
                 if (settings.store.showNotifications) {
                   showNotification(`WebSocket: ${urlObj.hostname} -> ${ip}`, "info");
                 }
               }
             }
           } catch (error) {
-            log.error(`WebSocket patch error: ${error}`);
+            statistics.errors++;
+            log.error(`WebSocket DNS resolution error: ${error}`);
           }
-
-          super(patchedUrl, protocols);
         }
       };
-
+    
       log.info("WebSocket patched successfully");
       return true;
     }
@@ -393,7 +487,7 @@ export default definePlugin({
       isActive: () => isActive,
       statistics,
 
-      start: () => {
+      start: async () => {
         if (isActive) {
           log.warn("Plugin is already active!");
           return;
@@ -401,15 +495,15 @@ export default definePlugin({
 
         try {
           log.info(`Starting ${PLUGIN_NAME} v${VERSION}`);
-          log.info(`Using Mullvad server: ${settings.store.mullvadServer} (${getSelectedMullvadIP()})`);
+          log.info(`Using Mullvad server: ${settings.store.mullvadServer} (${getSelectedDOHEndpoint()})`);
 
           const fetchSuccess = patchFetch();
-          const wsSuccess = patchWebSocket();
+          const wsSuccess = await patchWebSocket();
 
           if (fetchSuccess) {
             isActive = true;
             showNotification(`${PLUGIN_NAME} activated successfully`, "success");
-            log.info(`Plugin started successfully with ${Object.keys(MULLVAD_DNS_SERVERS).length} Mullvad DNS servers`);
+            log.info(`Plugin started successfully with ${Object.keys(MULLVAD_DOH_ENDPOINTS).length} Mullvad DoH endpoints`);
             log.info(`Monitoring ${DISCORD_DOMAINS.length} Discord domains`);
             log.info(`WebSocket patch: ${settings.store.patchWebSocket ? "enabled" : "disabled"}`);
             log.info(`CDN bypass: ${settings.store.bypassCDN ? "enabled" : "disabled"}`);
@@ -455,20 +549,25 @@ export default definePlugin({
       },
 
       // Utility methods
-      getDNSTable: () => ({ ...MULLVAD_DNS_SERVERS }),
+      getDNSTable: () => ({ ...MULLVAD_DOH_ENDPOINTS }),
       getMonitoredDomains: () => [...DISCORD_DOMAINS],
       getCacheStats: () => ({
         cacheSize: dnsCache.size,
         cachedHostnames: Array.from(dnsCache.keys()),
-        cacheEntries: Object.fromEntries(dnsCache)
+        cacheEntries: Object.fromEntries(
+          Array.from(dnsCache.entries()).map(([key, value]) => [key, value.ip])
+        )
       }),
       getStatistics: () => ({ ...statistics }),
       getSelectedServer: () => settings.store.mullvadServer,
       clearStatistics: () => {
         statistics.totalRequests = 0;
-        statistics.successfulResolutions = 0;
-        statistics.failedResolutions = 0;
+        statistics.dohQueries = 0;
         statistics.cacheHits = 0;
+        statistics.cacheExpired = 0;
+        statistics.fallbacks = 0;
+        statistics.webSocketConnections = 0;
+        statistics.errors = 0;
         log.info("Statistics cleared");
       },
       clearCache: () => {
@@ -477,19 +576,19 @@ export default definePlugin({
         log.info(`Cleared ${size} DNS cache entries`);
         return size;
       },
-      addCustomRecord: (hostname, ip) => {
-        if (typeof hostname === "string" && typeof ip === "string") {
-          MULLVAD_DNS_SERVERS[hostname] = ip;
-          log.info(`➕ Added custom DNS record: ${hostname} -> ${ip}`);
+      addCustomRecord: (hostname, dohEndpoint) => {
+        if (typeof hostname === "string" && typeof dohEndpoint === "string") {
+          MULLVAD_DOH_ENDPOINTS[hostname] = dohEndpoint;
+          log.info(`Added custom DoH endpoint: ${hostname} -> ${dohEndpoint}`);
           return true;
         }
         return false;
       },
       removeCustomRecord: (hostname) => {
-        if (Object.prototype.hasOwnProperty.call(MULLVAD_DNS_SERVERS, hostname)) {
-          delete MULLVAD_DNS_SERVERS[hostname];
+        if (Object.prototype.hasOwnProperty.call(MULLVAD_DOH_ENDPOINTS, hostname)) {
+          delete MULLVAD_DOH_ENDPOINTS[hostname];
           dnsCache.delete(hostname);
-          log.info(`➖ Removed DNS record: ${hostname}`);
+          log.info(`Removed DoH endpoint: ${hostname}`);
           return true;
         }
         return false;
