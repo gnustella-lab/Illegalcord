@@ -61,17 +61,28 @@ export default definePlugin({
     const PLUGIN_NAME = "MullvadDNS";
     const VERSION = "1.3.0";
 
-    // Mullvad DNS records for Discord services
-    const MULLVAD_DNS_RECORDS = {
-      "discord.com": "162.159.137.233",
-      "gateway.discord.gg": "162.159.135.233",
-      "media.discordapp.net": "152.67.79.60",
-      "cdn.discordapp.com": "152.67.72.12",
-      "status.discord.com": "104.18.33.247",
-      "ptb.discord.com": "162.159.137.233",
-      "canary.discord.com": "162.159.137.233",
-      "discordapp.net": "152.67.79.60"
+    // Official Mullvad DNS servers (DoH/DoT supported)
+    // Source: https://mullvad.net/en/help/dns-over-https-and-dns-over-tls
+    const MULLVAD_DNS_SERVERS = {
+      "dns.mullvad.net": "194.242.2.2",                    // Base DNS (no content blocking)
+      "adblock.dns.mullvad.net": "194.242.2.3",            // Ads + Trackers blocking
+      "base.dns.mullvad.net": "194.242.2.4",               // Ads + Trackers + Malware blocking
+      "extended.dns.mullvad.net": "194.242.2.5",           // Ads + Trackers + Malware + Social media blocking
+      "family.dns.mullvad.net": "194.242.2.6",             // Ads + Trackers + Malware + Adult + Gambling blocking
+      "all.dns.mullvad.net": "194.242.2.9"                 // All content blocking
     };
+
+    // Discord services will use Mullvad DNS resolution
+    const DISCORD_DOMAINS = [
+      "discord.com",
+      "gateway.discord.gg",
+      "media.discordapp.net",
+      "cdn.discordapp.com",
+      "status.discord.com",
+      "ptb.discord.com",
+      "canary.discord.com",
+      "discordapp.net"
+    ];
 
     // State management
     const originalFetch = window.fetch;
@@ -171,7 +182,21 @@ export default definePlugin({
         return dnsCache.get(hostname);
       }
 
-      const record = MULLVAD_DNS_RECORDS[hostname] || null;
+      // Check if hostname is a Discord domain
+      const isDiscordDomain = DISCORD_DOMAINS.some(domain =>
+        hostname === domain || hostname.endsWith(`.${domain}`)
+      );
+
+      if (isDiscordDomain) {
+        // Use Mullvad DNS server for resolution
+        const mullvadServer = MULLVAD_DNS_SERVERS["dns.mullvad.net"];
+        dnsCache.set(hostname, mullvadServer);
+        log.verbose(`Cached Discord domain: ${hostname} -> ${mullvadServer} (Mullvad DNS)`);
+        return mullvadServer;
+      }
+
+      // Check if it's a direct Mullvad DNS server hostname
+      const record = MULLVAD_DNS_SERVERS[hostname] || null;
       if (record) {
         dnsCache.set(hostname, record);
         log.verbose(`Cached new record: ${hostname} -> ${record}`);
@@ -287,7 +312,8 @@ export default definePlugin({
           if (fetchSuccess) {
             isActive = true;
             showNotification(`${PLUGIN_NAME} activated successfully`, "success");
-            log.info(`✅ Plugin started successfully with ${Object.keys(MULLVAD_DNS_RECORDS).length} DNS records`);
+            log.info(`✅ Plugin started successfully with ${Object.keys(MULLVAD_DNS_SERVERS).length} Mullvad DNS servers`);
+            log.info(`📋 Monitoring ${DISCORD_DOMAINS.length} Discord domains`);
           } else {
             throw new Error("Failed to patch network functions");
           }
@@ -325,7 +351,8 @@ export default definePlugin({
       },
 
       // Utility methods
-      getDNSTable: () => ({ ...MULLVAD_DNS_RECORDS }),
+      getDNSTable: () => ({ ...MULLVAD_DNS_SERVERS }),
+      getMonitoredDomains: () => [...DISCORD_DOMAINS],
       getCacheStats: () => ({
         cacheSize: dnsCache.size,
         cachedHostnames: Array.from(dnsCache.keys()),
@@ -347,15 +374,15 @@ export default definePlugin({
       },
       addCustomRecord: (hostname, ip) => {
         if (typeof hostname === "string" && typeof ip === "string") {
-          MULLVAD_DNS_RECORDS[hostname] = ip;
+          MULLVAD_DNS_SERVERS[hostname] = ip;
           log.info(`➕ Added custom DNS record: ${hostname} -> ${ip}`);
           return true;
         }
         return false;
       },
       removeCustomRecord: (hostname) => {
-        if (Object.prototype.hasOwnProperty.call(MULLVAD_DNS_RECORDS, hostname)) {
-          delete MULLVAD_DNS_RECORDS[hostname];
+        if (Object.prototype.hasOwnProperty.call(MULLVAD_DNS_SERVERS, hostname)) {
+          delete MULLVAD_DNS_SERVERS[hostname];
           dnsCache.delete(hostname);
           log.info(`➖ Removed DNS record: ${hostname}`);
           return true;
