@@ -270,7 +270,8 @@ export default definePlugin({
     },
 
     getIllegalcordDonorBadges(userId: string) {
-        return IllegalcordDonorBadges[userId]?.map(badge => ({
+        return IllegalcordDonorBadges[userId]?.map((badge, idx) => ({
+            id: `illegalcord_donor_badge_${idx}`,
             iconSrc: badge.badge,
             description: badge.tooltip,
             position: BadgePosition.START,
@@ -288,9 +289,10 @@ export default definePlugin({
             },
         } satisfies ProfileBadge));
     },
-    
+
     getTrashCordDonorBadges(userId: string) {
-        return TrashCordDonorBadges[userId]?.map(badge => ({
+        return TrashCordDonorBadges[userId]?.map((badge, idx) => ({
+            id: `trashcord_donor_badge_${idx}`,
             iconSrc: badge.badge,
             description: badge.tooltip,
             position: BadgePosition.START,
