@@ -30,6 +30,7 @@ Our included plugins can be found [here](https://equicord.org/plugins).
 - **StaffDetector**
 - **BigFileUpload**
 - **Stalker**
+- **MassMention**
 - **WebRTCLeakPrevent**
 - **AutoModBypass**
 - **Securecord** | (AES 256 on messages)
