@@ -31,6 +31,7 @@ I plugin inclusi possono essere trovati [qui](https://equicord.org/plugins).
 - **StaffDetector**
 - **BigFileUpload**
 - **Stalker**
+- **MassMention**
 - **WebRTCLeakPrevent**
 - **AutoModBypass**
 - **ServerCloner**
