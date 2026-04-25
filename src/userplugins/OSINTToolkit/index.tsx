@@ -38,11 +38,13 @@ interface IPInfo {
 const OSINT_TOOLS = [
     { id: "see-know", name: "See-Know", url: "https://see-know.eu/", description: "" },
     { id: "epieos", name: "Epieos", url: "https://epieos.com/", description: "" },
+    { id: "osintx", name: "Osintx_", url: "https://www.osintx.io/", description: "" },    
     { id: "socialeye", name: "SocialEye", url: "https://socialeye.net/", description: "" },
     { id: "cloudsint", name: "Cloudsint", url: "https://cloudsint.net/", description: "" },    
     { id: "proximity", name: "Proximity OSINT", url: "https://www.proximityosint.com/", description: "" },
     { id: "deadeye", name: "DeadEye", url: "https://deadeye.cc/", description: "" },
-    { id: "indicia", name: "Indicia", url: "https://indicia.app/", description: "" }
+    { id: "indicia", name: "Indicia", url: "https://indicia.app/", description: "" },
+    { id: "tempemail", name: "Snapmail (Temp-Email)", url: "https://www.snapmail.in/", description: "" }
 ];
 
 const OSINT_RESOURCES = [
@@ -73,7 +75,6 @@ const settings = definePluginSettings({
             "/usersearch johndoe\n" +
             "\n" +
             "Right-click on any message to access OSINT tools!",
-        default: "OSINTToolkit command list"
     }
 });
 
