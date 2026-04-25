@@ -43,6 +43,12 @@ const OSINT_TOOLS = [
     { id: "indicia", name: "Indicia", url: "https://indicia.app/", description: "OSINT investigation tool" }
 ];
 
+const OSINT_RESOURCES = [
+    { id: "pikaosint", name: "PikaOSINT", url: "https://pikaosint.pages.dev/", description: "OSINT tools collection" },
+    { id: "osintframework", name: "OSINT Framework", url: "https://osintframework.com/", description: "OSINT framework and tools" },
+    { id: "photo-osint", name: "Photo OSINT", url: "https://start.me/p/0PgzqO/photo-osint", description: "Photo investigation resources" }
+];
+
 const settings = definePluginSettings({
     enableLogging: {
         type: OptionType.BOOLEAN,
@@ -289,7 +295,7 @@ const messageContextMenuPatch: NavContextMenuPatchCallback = (children, { messag
 
     children.push(
         <Menu.MenuGroup id="osint-tools">
-            <Menu.MenuItem id="osint-tools-header" label="OSINT Toolkit">
+            <Menu.MenuItem id="osint-tools-main" label="OSINT Tools">
                 {OSINT_TOOLS.map(tool => (
                     <Menu.MenuItem
                         key={`osint-${tool.id}`}
@@ -297,6 +303,18 @@ const messageContextMenuPatch: NavContextMenuPatchCallback = (children, { messag
                         label={tool.name}
                         hint={tool.description}
                         action={() => openUrl(tool.url)}
+                    />
+                ))}
+            </Menu.MenuItem>
+            <Menu.MenuSeparator />
+            <Menu.MenuItem id="osint-resources-main" label="OSINT Resources">
+                {OSINT_RESOURCES.map(resource => (
+                    <Menu.MenuItem
+                        key={`resource-${resource.id}`}
+                        id={`resource-${resource.id}`}
+                        label={resource.name}
+                        hint={resource.description}
+                        action={() => openUrl(resource.url)}
                     />
                 ))}
             </Menu.MenuItem>
