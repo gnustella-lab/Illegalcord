@@ -4,9 +4,11 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-import { definePluginSettings } from "@api/Settings";
 import { ApplicationCommandInputType, sendBotMessage } from "@api/Commands";
+import { NavContextMenuPatchCallback } from "@api/ContextMenu";
+import { definePluginSettings } from "@api/Settings";
 import definePlugin, { OptionType } from "@utils/types";
+import { Menu } from "@webpack/common";
 
 interface DomainInfo {
     domain: string;
@@ -33,6 +35,14 @@ interface IPInfo {
     zip?: string;
 }
 
+const OSINT_TOOLS = [
+    { id: "see-know", name: "See-Know", url: "https://see-know.eu/", description: "European OSINT platform" },
+    { id: "socialeye", name: "SocialEye", url: "https://socialeye.net/", description: "Social media investigation" },
+    { id: "proximity", name: "Proximity OSINT", url: "https://www.proximityosint.com/", description: "Geolocation analysis" },
+    { id: "deadeye", name: "DeadEye", url: "https://deadeye.cc/", description: "Advanced reconnaissance" },
+    { id: "indicia", name: "Indicia", url: "https://indicia.app/", description: "OSINT investigation tool" }
+];
+
 const settings = definePluginSettings({
     enableLogging: {
         type: OptionType.BOOLEAN,
@@ -52,7 +62,9 @@ const settings = definePluginSettings({
             "/domain google.com\n" +
             "/iplookup 1.1.1.1\n" +
             "/myip\n" +
-            "/usersearch johndoe",
+            "/usersearch johndoe\n" +
+            "\n" +
+            "Right-click on any message to access OSINT tools!",
         default: "OSINTToolkit command list"
     }
 });
@@ -265,12 +277,43 @@ function createIPMessage(info: IPInfo) {
     ].join("\n");
 }
 
+function openUrl(url: string) {
+    window.open(url, "_blank", "noopener,noreferrer");
+}
+
+const messageContextMenuPatch: NavContextMenuPatchCallback = (children, { message }) => {
+    if (!message || !message.author) return;
+
+    const osintGroup = children.find((child: any) => child?.props?.id === "osint-tools");
+    if (osintGroup) return;
+
+    children.push(
+        <Menu.MenuGroup id="osint-tools">
+            <Menu.MenuItem id="osint-tools-header" label="OSINT Toolkit">
+                {OSINT_TOOLS.map(tool => (
+                    <Menu.MenuItem
+                        key={`osint-${tool.id}`}
+                        id={`osint-${tool.id}`}
+                        label={tool.name}
+                        hint={tool.description}
+                        action={() => openUrl(tool.url)}
+                    />
+                ))}
+            </Menu.MenuItem>
+        </Menu.MenuGroup>
+    );
+};
+
 export default definePlugin({
     name: "OSINTToolkit",
     description: "OSINT - Domain age lookup, IP information, and username search",
     tags: ["Utility", "Developers"],
     authors: [{ name: "Irritably", id: 928787166916640838n }],
     settings,
+
+    contextMenus: {
+        "message": messageContextMenuPatch
+    },
 
     commands: [
         {
