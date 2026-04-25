@@ -295,28 +295,29 @@ const messageContextMenuPatch: NavContextMenuPatchCallback = (children, { messag
 
     children.push(
         <Menu.MenuGroup id="osint-tools">
-            <Menu.MenuItem id="osint-tools-main" label="OSINT Tools">
-                {OSINT_TOOLS.map(tool => (
-                    <Menu.MenuItem
-                        key={`osint-${tool.id}`}
-                        id={`osint-${tool.id}`}
-                        label={tool.name}
-                        hint={tool.description}
-                        action={() => openUrl(tool.url)}
-                    />
-                ))}
-            </Menu.MenuItem>
-            <Menu.MenuSeparator />
-            <Menu.MenuItem id="osint-resources-main" label="OSINT Resources">
-                {OSINT_RESOURCES.map(resource => (
-                    <Menu.MenuItem
-                        key={`resource-${resource.id}`}
-                        id={`resource-${resource.id}`}
-                        label={resource.name}
-                        hint={resource.description}
-                        action={() => openUrl(resource.url)}
-                    />
-                ))}
+            <Menu.MenuItem id="osint-toolkit-main" label="OSINT Toolkit">
+                <Menu.MenuItem id="csint-tools" label="CSINT Tools">
+                    {OSINT_TOOLS.map(tool => (
+                        <Menu.MenuItem
+                            key={`csint-${tool.id}`}
+                            id={`csint-${tool.id}`}
+                            label={tool.name}
+                            hint={tool.description}
+                            action={() => openUrl(tool.url)}
+                        />
+                    ))}
+                </Menu.MenuItem>
+                <Menu.MenuItem id="osint-tools" label="OSINT Tools">
+                    {OSINT_RESOURCES.map(resource => (
+                        <Menu.MenuItem
+                            key={`osint-${resource.id}`}
+                            id={`osint-${resource.id}`}
+                            label={resource.name}
+                            hint={resource.description}
+                            action={() => openUrl(resource.url)}
+                        />
+                    ))}
+                </Menu.MenuItem>
             </Menu.MenuItem>
         </Menu.MenuGroup>
     );
