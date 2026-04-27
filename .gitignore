@@ -22,7 +22,8 @@ lerna-debug.log*
 *.tsbuildinfo
 
 .modules/
-src/userplugins
+# src/userplugins - Uncomment to ignore user plugins
+# src/userplugins
 
 ExtensionCache/
 /settings
