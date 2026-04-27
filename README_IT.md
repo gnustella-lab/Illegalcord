@@ -37,6 +37,7 @@ I plugin inclusi possono essere trovati [qui](https://equicord.org/plugins).
 - **ServerCloner**
 - **Securecord** | (AES 256 sui messaggi)
 - **Securecord Opossum Blazing Edition** | BlazingOpossum, dimensione blocco + IV + MAC Tag 128 bit, chiave 256 bit. Basato su istruzioni AVX2, algoritmo crittografico simmetrico post-quantistico ad alte prestazioni. Avanzato e moderno. | https://github.com/ZygoteCode/BlazingOpossum)
+- **GhostSelfbot** | Avvia Ghost Selfbot (exe o source) con auto-configurazione, installer requisiti Python e gestione token | https://ghostt.cc/
 - **IGP** (plugin pgp)
 - **Mullvad DNS Over Discord** (Privacy e Sicurezza)
 - **CustomDNS**
@@ -65,7 +66,6 @@ I plugin inclusi possono essere trovati [qui](https://equicord.org/plugins).
 - **Opsec Plugin** | (https://github.com/ItzSolace/OpSec-Vencord/tree/main) | (Abbiamo una versione diversa con supporto italiano)
 - **DecibelLimiter** | (https://github.com/BashOnZsh/Bashcord/tree/main/src/userplugins/decibelLimiter)
 - **CrashHandlerEnhanched** | (https://github.com/Mifu999/Equicord-Userplugins/tree/main/userplugins/crashHandlerEnhanced)
-- **GhostSelfbot** | Avvia Ghost Selfbot (exe o source) con auto-configurazione, installer requisiti Python e gestione token | https://ghostt.cc/
 
 </details>
 
