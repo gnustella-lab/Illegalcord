@@ -235,17 +235,20 @@ const preview = (content: string) =>
         ? `${content.slice(0, MESSAGE_PREVIEW_LIMIT)}...`
         : content;
 
+const isCurrentUser = (userId: string) =>
+    userId === UserStore.getCurrentUser()?.id;
+
 const shouldTrackUser = (userId: string) => {
     if (!targets.includes(userId)) return false;
     if (settings.store.trackSelf) return true;
-    return userId !== UserStore.getCurrentUser()?.id;
+    return !isCurrentUser(userId);
 };
 
 const shouldTrackServer = (guildId?: string) =>
     guildId != null && serverTargets.includes(guildId);
 
 const getScope = (userId: string, guildId?: string): SurveillanceScope | undefined => {
-    if (shouldTrackServer(guildId)) return "server";
+    if (shouldTrackServer(guildId) && !isCurrentUser(userId)) return "server";
     if (shouldTrackUser(userId)) return "person";
 };
 
@@ -290,6 +293,7 @@ const getChannelEventInfo = (event: ChannelFluxEvent): ChannelInfo => {
 };
 
 const rememberServerUser = (userId: string, guildId?: string) => {
+    if (isCurrentUser(userId)) return;
     if (!guildId || !serverTargets.includes(guildId)) return;
 
     let guildIds = seenServerUsers.get(userId);
@@ -730,6 +734,8 @@ const logGuildMemberEvent = (
     if (!shouldTrackServer(guildId)) return;
 
     const userId = event.user?.id ?? event.userId ?? event.member?.userId;
+    if (userId && isCurrentUser(userId)) return;
+
     const username = userId ? getUsername(userId, event.user?.username) : "Unknown user";
     const details =
         type === "guild_member_add"

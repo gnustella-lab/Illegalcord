@@ -24,6 +24,7 @@ interface GuildOption {
     value: string;
 }
 
+const EVENT_PAGE_SIZE = 250;
 const cl = classNameFactory("vc-surveillance-");
 
 const filterOptions: Array<{ label: string; value: EventFilter; }> = [
@@ -170,6 +171,7 @@ function SurveillanceTab() {
     const [targetInput, setTargetInput] = useState("");
     const [query, setQuery] = useState("");
     const [filter, setFilter] = useState<EventFilter>("all");
+    const [visibleEventCount, setVisibleEventCount] = useState(EVENT_PAGE_SIZE);
     const guilds = useStateFromStores([GuildStore], () => GuildStore.getGuildsArray());
 
     useEffect(() => {
@@ -186,9 +188,19 @@ function SurveillanceTab() {
         };
     }, []);
 
+    useEffect(() => {
+        setVisibleEventCount(EVENT_PAGE_SIZE);
+        return () => undefined;
+    }, [filter, query]);
+
     const filteredEvents = useMemo(() =>
         events.filter(event => eventMatchesFilter(event, filter) && eventMatchesQuery(event, query)),
         [events, filter, query]
+    );
+
+    const visibleEvents = useMemo(() =>
+        filteredEvents.slice(0, visibleEventCount),
+        [filteredEvents, visibleEventCount]
     );
 
     const stats = useMemo(() => ({
@@ -303,10 +315,21 @@ function SurveillanceTab() {
                         ))}
                     </div>
                     <div className={cl("timeline")}>
-                        {filteredEvents.length ? filteredEvents.map(event => (
+                        {visibleEvents.length ? visibleEvents.map(event => (
                             <EventRow key={event.id} event={event} />
                         )) : <div className={cl("empty")}>No events.</div>}
                     </div>
+                    {filteredEvents.length > visibleEvents.length ? (
+                        <div className={cl("timeline-footer")}>
+                            <span>Showing {visibleEvents.length} of {filteredEvents.length}</span>
+                            <button
+                                className={cl("action")}
+                                onClick={() => setVisibleEventCount(count => count + EVENT_PAGE_SIZE)}
+                            >
+                                Show more
+                            </button>
+                        </div>
+                    ) : null}
                 </section>
             </div>
         </SettingsTab>
