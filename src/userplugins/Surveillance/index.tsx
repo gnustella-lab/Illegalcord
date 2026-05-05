@@ -26,6 +26,7 @@ const TYPING_COOLDOWN = 15_000;
 let targets: string[] = [];
 const targetListeners = new Set<() => void>();
 const messageCache = new Map<string, MessageSnapshot>();
+const previousVoiceStates = new Map<string, VoiceState>();
 const typingCooldowns = new Map<string, number>();
 let lastStatuses = new Map<string, OnlineStatus>();
 let lastActivities = new Map<string, Map<string, string>>();
@@ -314,8 +315,6 @@ const getVoiceChanges = (previousState: VoiceState, currentState: VoiceState) =>
     return changes;
 };
 
-const previousVoiceStates = new Map<string, VoiceState>();
-
 const handleVoiceState = (state: VoiceState) => {
     if (!settings.store.logVoice) return;
     if (!shouldTrack(state.userId)) return;
@@ -325,13 +324,15 @@ const handleVoiceState = (state: VoiceState) => {
 
     if (oldChannelId !== channelId) {
         if (!oldChannelId && channelId) {
-            addUserEvent("voice_join", userId, `Joined voice channel ${getChannelInfo(channelId).channelName ?? "Unknown channel"}.`, getChannelInfo(channelId));
+            const channelInfo = getChannelInfo(channelId);
+            addUserEvent("voice_join", userId, `Joined voice channel ${channelInfo.channelName ?? "Unknown channel"}.`, channelInfo);
         } else if (oldChannelId && !channelId) {
-            addUserEvent("voice_leave", userId, `Left voice channel ${getChannelInfo(oldChannelId).channelName ?? "Unknown channel"}.`, getChannelInfo(oldChannelId));
+            const channelInfo = getChannelInfo(oldChannelId);
+            addUserEvent("voice_leave", userId, `Left voice channel ${channelInfo.channelName ?? "Unknown channel"}.`, channelInfo);
         } else if (oldChannelId && channelId) {
             const oldChannel = getChannelInfo(oldChannelId).channelName ?? "Unknown channel";
-            const newChannel = getChannelInfo(channelId).channelName ?? "Unknown channel";
-            addUserEvent("voice_move", userId, `Moved from ${oldChannel} to ${newChannel}.`, getChannelInfo(channelId));
+            const channelInfo = getChannelInfo(channelId);
+            addUserEvent("voice_move", userId, `Moved from ${oldChannel} to ${channelInfo.channelName ?? "Unknown channel"}.`, channelInfo);
         }
     }
 
