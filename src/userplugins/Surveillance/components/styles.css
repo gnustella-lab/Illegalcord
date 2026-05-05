@@ -138,6 +138,19 @@
     margin-top: 12px;
 }
 
+.vc-surveillance-timeline-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-top: 12px;
+}
+
+.vc-surveillance-timeline-footer span {
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
 .vc-surveillance-event-row {
     display: grid;
     grid-template-columns: 88px minmax(0, 1fr);
@@ -179,7 +192,7 @@
 .vc-surveillance-event-activity_start,
 .vc-surveillance-event-activity_stop,
 .vc-surveillance-event-activity_update {
-    background: var(--purple-400);
+    background: var(--pink-400);
 }
 
 .vc-surveillance-event-channel_create,
@@ -235,6 +248,7 @@
 
     .vc-surveillance-header,
     .vc-surveillance-timeline-head,
+    .vc-surveillance-timeline-footer,
     .vc-surveillance-target-input {
         align-items: stretch;
         flex-direction: column;
