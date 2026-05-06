@@ -22,6 +22,7 @@ const SETTINGS_ENTRY_KEY = "illegalcord_surveillance";
 const NOTIFICATION_COLOR = "#5865f2";
 const MESSAGE_PREVIEW_LIMIT = 220;
 const TYPING_COOLDOWN = 15_000;
+const MEMBER_JOIN_FRESHNESS = 300_000;
 
 let targets: string[] = [];
 let serverTargets: string[] = [];
@@ -166,6 +167,11 @@ export const settings = definePluginSettings({
         default: true,
         description: "Add a Surveillance toggle to user context menus.",
     },
+    ignoreBots: {
+        type: OptionType.BOOLEAN,
+        default: false,
+        description: "Ignore bot accounts while logging user activity.",
+    },
     logMessages: {
         type: OptionType.BOOLEAN,
         default: true,
@@ -173,7 +179,7 @@ export const settings = definePluginSettings({
     },
     captureMessageContent: {
         type: OptionType.BOOLEAN,
-        default: false,
+        default: true,
         description: "Include message previews in local logs.",
     },
     logMessageChanges: {
@@ -205,6 +211,11 @@ export const settings = definePluginSettings({
         type: OptionType.BOOLEAN,
         default: true,
         description: "Log voice joins, leaves, moves, and state changes.",
+    },
+    logMemberUpdates: {
+        type: OptionType.BOOLEAN,
+        default: true,
+        description: "Log server member update events.",
     },
     notifyEvents: {
         type: OptionType.BOOLEAN,
@@ -238,8 +249,15 @@ const preview = (content: string) =>
 const isCurrentUser = (userId: string) =>
     userId === UserStore.getCurrentUser()?.id;
 
+const isBotUser = (userId: string, user?: User) =>
+    Boolean(user?.bot ?? UserStore.getUser(userId)?.bot);
+
+const shouldIgnoreUser = (userId: string, user?: User) =>
+    settings.store.ignoreBots && isBotUser(userId, user);
+
 const shouldTrackUser = (userId: string) => {
     if (!targets.includes(userId)) return false;
+    if (shouldIgnoreUser(userId)) return false;
     if (settings.store.trackSelf) return true;
     return !isCurrentUser(userId);
 };
@@ -248,6 +266,7 @@ const shouldTrackServer = (guildId?: string) =>
     guildId != null && serverTargets.includes(guildId);
 
 const getScope = (userId: string, guildId?: string): SurveillanceScope | undefined => {
+    if (shouldIgnoreUser(userId)) return;
     if (shouldTrackServer(guildId) && !isCurrentUser(userId)) return "server";
     if (shouldTrackUser(userId)) return "person";
 };
@@ -294,6 +313,7 @@ const getChannelEventInfo = (event: ChannelFluxEvent): ChannelInfo => {
 
 const rememberServerUser = (userId: string, guildId?: string) => {
     if (isCurrentUser(userId)) return;
+    if (shouldIgnoreUser(userId)) return;
     if (!guildId || !serverTargets.includes(guildId)) return;
 
     let guildIds = seenServerUsers.get(userId);
@@ -530,6 +550,7 @@ const handleVoiceState = (state: VoiceState) => {
 const logMessage = (message: Message) => {
     const { author } = message;
     if (!settings.store.logMessages && !settings.store.logMessageChanges) return;
+    if (shouldIgnoreUser(author.id, author)) return;
 
     const info = getChannelInfo(message.channel_id);
     if (!shouldTrackEvent(author.id, info.guildId)) return;
@@ -566,6 +587,7 @@ const logMessage = (message: Message) => {
 
 const logMessageUpdate = (message: Message) => {
     if (!settings.store.logMessageChanges) return;
+    if (shouldIgnoreUser(message.author.id, message.author)) return;
 
     const previousMessage = messageCache.get(message.id);
     const info = getChannelInfo(message.channel_id);
@@ -645,6 +667,7 @@ const logMessageDelete = (messageId: string, channelId: string) => {
 
 const logTyping = (userId: string, channelId: string) => {
     if (!settings.store.logTyping) return;
+    if (shouldIgnoreUser(userId)) return;
 
     const info = getChannelInfo(channelId);
     if (!shouldTrackEvent(userId, info.guildId)) return;
@@ -665,6 +688,7 @@ const formatEmoji = (emoji: ReactionEmoji | undefined) =>
 
 const logReaction = (type: "reaction_add" | "reaction_remove", event: MessageReactionFluxEvent) => {
     if (!settings.store.logReactions || !event.userId) return;
+    if (shouldIgnoreUser(event.userId)) return;
 
     const info = getChannelInfo(event.channelId);
     if (!shouldTrackEvent(event.userId, info.guildId)) return;
@@ -730,16 +754,21 @@ const logGuildMemberEvent = (
     type: "guild_member_add" | "guild_member_remove" | "guild_member_update",
     event: GuildMemberFluxEvent
 ) => {
+    if (type === "guild_member_update" && !settings.store.logMemberUpdates) return;
+
     const guildId = event.guildId ?? event.guild_id ?? event.member?.guildId;
     if (!shouldTrackServer(guildId)) return;
 
     const userId = event.user?.id ?? event.userId ?? event.member?.userId;
     if (userId && isCurrentUser(userId)) return;
+    if (userId && shouldIgnoreUser(userId, event.user)) return;
 
+    const joinedAt = event.member?.joinedAt ? Date.parse(event.member.joinedAt) : undefined;
+    const isFreshJoin = joinedAt != null && Date.now() - joinedAt < MEMBER_JOIN_FRESHNESS;
     const username = userId ? getUsername(userId, event.user?.username) : "Unknown user";
     const details =
         type === "guild_member_add"
-            ? "Joined the server."
+            ? isFreshJoin ? "Joined the server." : "Member became visible in the live cache."
             : type === "guild_member_remove"
                 ? "Left the server."
                 : "Updated server member.";
@@ -750,6 +779,8 @@ const logGuildMemberEvent = (
         userId: userId ?? guildId,
         username,
         metadata: {
+            joinedAt: event.member?.joinedAt ?? null,
+            realJoin: type === "guild_member_add" ? isFreshJoin : null,
             nick: event.member?.nick ?? null,
             roleCount: event.member?.roles.length ?? null,
         },
