@@ -137,6 +137,7 @@ Note: Firefox extension zip requires Firefox for developers
 - [thororen1234](https://github.com/thororen1234) For Creating [Equicord](https://github.com/Equicord)
 - [Vendicated](https://github.com/Vendicated) for creating [Vencord](https://github.com/Vendicated/Vencord)
 - [verticalsync](https://github.com/verticalsync) for creating [Suncord](https://github.com/verticalsync/Suncord)
+- [clrxxo ](https://github.com/clrxxo) for creating [Kamidere](https://github.com/clrxxo/Kamidere)
 
 ## Disclaimer
 
