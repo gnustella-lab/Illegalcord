@@ -23,7 +23,7 @@ Our included plugins can be found [here](https://equicord.org/plugins).
 <details>
 <summary>Click to see the plugins added to Illegalcord</summary>
 
-- **Surveillance**: Illegalcord's new top-rated plugin that lets you perform OSINT and conduct MASS SURVEILLANCE on people and Discord servers. 
+- **Surveillance**: Illegalcord's new top-rated plugin that lets you perform OSINT and conduct MASS SURVEILLANCE on people and Discord servers.
 
 - **Nitro Sniper**: | (https://github.com/neoarz/NitroSniper/tree/main)
 - **FakeMuteAndDeafen**
@@ -71,6 +71,10 @@ Our included plugins can be found [here](https://equicord.org/plugins).
 </details>
 
 Illegalcord has his personal badges btw
+
+
+- [X64 GUI](https://github.com/Equicord/Equilotl/releases/latest/download/Equilotl-darwin-x64.zip)
+- [ARM64 GUI](https://github.com/Equicord/Equilotl/releases/latest/download/Equilotl-darwin-arm64.zip)
 
 ## Installing Illegalcord
 
