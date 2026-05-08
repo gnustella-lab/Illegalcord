@@ -29,8 +29,8 @@ export default definePlugin({
         {
             find: "♫ (つ｡◕‿‿◕｡)つ ♪",
             replacement: {
-                match: /(?=let{navId:)(?<=function \i\((\i)\).+?)/,
-                replace: "$1=Vencord.Api.ContextMenu._usePatchContextMenu($1);"
+                match: /(function \i\((\i)\)\{)(?=let\{navId:)/,
+                replace: "$1$2=Vencord.Api.ContextMenu._usePatchContextMenu($2);"
             }
         },
         {
