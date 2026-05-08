@@ -27,10 +27,10 @@ export default definePlugin({
 
     patches: [
         {
-            find: "♫ (つ｡◕‿‿◕｡)つ ♪",
+            find: "Menu API only allows Items and groups of Items as children",
             replacement: {
-                match: /(?=let{navId:)(?<=function \i\((\i)\).+?)/,
-                replace: "$1=Vencord.Api.ContextMenu._usePatchContextMenu($1);"
+                match: /(function \i\((\i)\)\{)(?=let\{navId:)/,
+                replace: "$1$2=Vencord.Api.ContextMenu._usePatchContextMenu($2);"
             }
         },
         {
