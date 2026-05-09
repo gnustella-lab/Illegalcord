@@ -8,7 +8,7 @@ import { CloneContext } from "./types";
 
 export async function cloneChannels(ctx: CloneContext): Promise<number> {
     let channelsFailed = 0;
-    const { sourceGuild, fullGuildData, newGuildId, options, estimateChannels, channelIdMap, roleIdMap, channelRateLimiter, channelsProgressStart, channelsProgressEnd } = ctx;
+    const { sourceGuild, fullGuildData, newGuildId, options, estimateChannels, channelIdMap, roleIdMap, taskQueue, channelsProgressStart, channelsProgressEnd } = ctx;
 
     const allChannels = estimateChannels;
 
@@ -42,15 +42,12 @@ export async function cloneChannels(ctx: CloneContext): Promise<number> {
     }
 
     let catStored = 0;
-    for (const cat of categoriesToCreate) {
-        checkGuildExistence(sourceGuild.id, newGuildId);
-        if (!state.isCloning) break;
-        catStored++;
-
+    const catPromises = categoriesToCreate.map(async (cat: any) => {
+        if (!state.isCloning) return;
+        
         try {
-            const progress = channelsProgressStart + ((catStored / Math.max(categoriesToCreate.length, 1)) * ((channelsProgressEnd - channelsProgressStart) * 0.2));
-            updateWithTime(`${actionLabel} category ${catStored}/${categoriesToCreate.length}: ${cat.name}`, progress);
-
+            checkGuildExistence(sourceGuild.id, newGuildId);
+            
             const catPayload: any = {
                 name: cat.name,
                 type: 4,
@@ -70,18 +67,24 @@ export async function cloneChannels(ctx: CloneContext): Promise<number> {
                 if (mappedOverwrites.length > 0) catPayload.permission_overwrites = mappedOverwrites;
             }
 
-            const response = await channelRateLimiter.execute(async () => {
+            const response = await taskQueue.execute(async () => {
                 return await RestAPI.post({ url: `/guilds/${newGuildId}/channels`, body: catPayload });
-            });
+            }, (msg) => updateWithTime(msg, (channelsProgressStart + ((catStored / Math.max(categoriesToCreate.length, 1)) * ((channelsProgressEnd - channelsProgressStart) * 0.2)))));
 
             if (response?.body?.id) {
                 channelIdMap[cat.id] = response.body.id;
             }
+            
+            catStored++;
+            const progress = channelsProgressStart + ((catStored / Math.max(categoriesToCreate.length, 1)) * ((channelsProgressEnd - channelsProgressStart) * 0.2));
+            updateWithTime(`${actionLabel} category ${catStored}/${categoriesToCreate.length}: ${cat.name}`, progress);
         } catch (e) {
             channelsFailed++;
             handleCloneError("Category", e, cat.name);
         }
-    }
+    });
+
+    await Promise.all(catPromises);
 
     const isCommunity = fullGuildData.features?.includes("COMMUNITY") ||
         otherChannels.some((c: any) => [5, 13, 15, 16].includes(c.type));
@@ -110,7 +113,7 @@ export async function cloneChannels(ctx: CloneContext): Promise<number> {
                 if (sourceRulesChannel.parent_id && channelIdMap[sourceRulesChannel.parent_id]) {
                     rulesPayload.parent_id = channelIdMap[sourceRulesChannel.parent_id];
                 }
-                const r1 = await channelRateLimiter.execute(() => RestAPI.post({ url: `/guilds/${newGuildId}/channels`, body: rulesPayload }));
+                const r1 = await taskQueue.execute(() => RestAPI.post({ url: `/guilds/${newGuildId}/channels`, body: rulesPayload })) as any;
                 if (r1?.body?.id) {
                     rulesChannelNewId = r1.body.id;
                     channelIdMap[sourceRulesChannel.id] = r1.body.id;
@@ -127,7 +130,7 @@ export async function cloneChannels(ctx: CloneContext): Promise<number> {
                 if (sourceUpdatesChannel.parent_id && channelIdMap[sourceUpdatesChannel.parent_id]) {
                     updatesPayload.parent_id = channelIdMap[sourceUpdatesChannel.parent_id];
                 }
-                const r2 = await channelRateLimiter.execute(() => RestAPI.post({ url: `/guilds/${newGuildId}/channels`, body: updatesPayload }));
+                const r2 = await taskQueue.execute(() => RestAPI.post({ url: `/guilds/${newGuildId}/channels`, body: updatesPayload })) as any;
                 if (r2?.body?.id) {
                     updatesChannelNewId = r2.body.id;
                     channelIdMap[sourceUpdatesChannel.id] = r2.body.id;
@@ -135,11 +138,11 @@ export async function cloneChannels(ctx: CloneContext): Promise<number> {
             }
 
             if (!rulesChannelNewId) {
-                const fallback = await channelRateLimiter.execute(() => RestAPI.post({ url: `/guilds/${newGuildId}/channels`, body: { name: "rules", type: 0 } }));
+                const fallback = await taskQueue.execute(() => RestAPI.post({ url: `/guilds/${newGuildId}/channels`, body: { name: "rules", type: 0 } })) as any;
                 rulesChannelNewId = fallback?.body?.id || null;
             }
             if (!updatesChannelNewId) {
-                const fallback = await channelRateLimiter.execute(() => RestAPI.post({ url: `/guilds/${newGuildId}/channels`, body: { name: "updates", type: 0 } }));
+                const fallback = await taskQueue.execute(() => RestAPI.post({ url: `/guilds/${newGuildId}/channels`, body: { name: "updates", type: 0 } })) as any;
                 updatesChannelNewId = fallback?.body?.id || null;
             }
 
@@ -195,15 +198,15 @@ export async function cloneChannels(ctx: CloneContext): Promise<number> {
     const remainingChannels = channelsToCreate.filter((c: any) => !alreadyCloned.has(c.id));
 
     let chStored = 0;
-    for (const ch of remainingChannels) {
-        checkGuildExistence(sourceGuild.id, newGuildId);
-        if (!state.isCloning) break;
-        chStored++;
+    let skipRemaining = false;
+
+    const channelPromises = remainingChannels.map(async (ch: any) => {
+        if (!state.isCloning) return;
+        if (skipRemaining) return;
 
         try {
-            const progress = channelsProgressStart + ((channelsProgressEnd - channelsProgressStart) * 0.2) + ((chStored / Math.max(remainingChannels.length, 1)) * ((channelsProgressEnd - channelsProgressStart) * 0.8));
-            updateWithTime(`${actionLabel} channel ${chStored}/${remainingChannels.length}: ${ch.name}`, progress);
-
+            checkGuildExistence(sourceGuild.id, newGuildId);
+            
             const chPayload: any = {
                 name: replaceEmojis(ch.name),
                 type: ch.type,
@@ -261,23 +264,31 @@ export async function cloneChannels(ctx: CloneContext): Promise<number> {
                 if (mappedOverwrites.length > 0) chPayload.permission_overwrites = mappedOverwrites;
             }
 
-            const response = await channelRateLimiter.execute(async () => {
+            const response = await taskQueue.execute(async () => {
                 return await RestAPI.post({ url: `/guilds/${newGuildId}/channels`, body: chPayload });
-            });
+            }, (msg) => updateWithTime(msg, channelsProgressStart + ((channelsProgressEnd - channelsProgressStart) * 0.2) + ((chStored / Math.max(remainingChannels.length, 1)) * ((channelsProgressEnd - channelsProgressStart) * 0.8))));
 
             if (response?.body?.id) {
                 channelIdMap[ch.id] = response.body.id;
             }
+
+            chStored++;
+            const progress = channelsProgressStart + ((channelsProgressEnd - channelsProgressStart) * 0.2) + ((chStored / Math.max(remainingChannels.length, 1)) * ((channelsProgressEnd - channelsProgressStart) * 0.8));
+            updateWithTime(`${actionLabel} channel ${chStored}/${remainingChannels.length}: ${ch.name}`, progress);
+
         } catch (e: any) {
             if (e?.rateLimitExhausted) {
                 channelsFailed += (remainingChannels.length - chStored);
                 updateWithTime(`Rate limited, skipping remaining channels...`, channelsProgressEnd);
-                break;
+                skipRemaining = true;
+                return;
             }
             channelsFailed++;
             handleCloneError("Channel", e, ch.name);
         }
-    }
+    });
+
+    await Promise.all(channelPromises);
 
     return channelsFailed;
 }

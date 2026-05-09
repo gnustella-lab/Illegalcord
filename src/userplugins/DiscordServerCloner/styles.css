@@ -28,7 +28,7 @@
 }
 
 /* Dynamic Pill Container */
-.cloner-pill-container {
+.vc-pill-container {
     position: fixed;
     top: 0;
     left: 0;

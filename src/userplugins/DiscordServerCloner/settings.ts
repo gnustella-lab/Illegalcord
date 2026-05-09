@@ -8,11 +8,11 @@ export const settings = definePluginSettings({
         description: "",
         component: VersionDisplay
     },
-    channelDelay: {
+    concurrencyLimit: {
         type: OptionType.SLIDER,
-        description: "Base delay between API requests (ms) - actual delay varies randomly",
-        default: 800,
-        markers: [500, 800, 1000, 1500, 2000],
-        stickToMarkers: false
+        description: "Cloning Speed (Concurrent API requests) - Higher is faster but may trigger more temporary rate limits. Recommended: 3-6.",
+        default: 5,
+        markers: [1, 2, 4, 6, 8, 10, 12],
+        stickToMarkers: true
     }
 });

@@ -59,19 +59,19 @@ export const VersionDisplay = () => {
             marginBottom: "16px"
         }}>
             <div>
-                <div style={{ fontSize: "14px", fontWeight: 600, color: "var(--header-primary)" }}>
+                <div style={{ fontSize: "14px", fontWeight: 600, color: "#ffffff" }}>
                     Server Cloner
                 </div>
-                <div style={{ fontSize: "12px", color: "var(--text-muted)", marginTop: "4px" }}>
-                    Version: <span style={{ color: "#5865f2", fontWeight: 600 }}>v{PLUGIN_VERSION}</span>
+                <div style={{ fontSize: "12px", color: "#58b9ff", marginTop: "4px" }}>
+                    Version: <span style={{ color: "#58b9ff", fontWeight: 600 }}>v{PLUGIN_VERSION}</span>
                     {updateStatus && (
                         <span style={{
                             marginLeft: "10px",
-                            color: updateStatus.includes("available") ? "#43b581" :
-                                updateStatus.includes("up to date") ? "#43b581" :
+                            color: updateStatus.includes("available") ? "#ffaa00" :
+                                updateStatus.includes("up to date") ? "#00ff00" :
                                     updateStatus.includes("failed") || updateStatus.includes("Failed") ? "#f04747" : "var(--text-muted)"
                         }}>
-                            • {updateStatus}
+                            &nbsp;• {updateStatus}
                         </span>
                     )}
                 </div>

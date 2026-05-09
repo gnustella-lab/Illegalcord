@@ -6,7 +6,7 @@ import { throwIfCancelled } from "../store";
 import { CloneContext } from "./types";
 
 export async function cloneSettings(ctx: CloneContext) {
-    const { fullGuildData, newGuildId, channelIdMap, settingsProgressEnd, estimateChannels } = ctx;
+    const { fullGuildData, newGuildId, channelIdMap, taskQueue, settingsProgressEnd, estimateChannels } = ctx;
     
     try {
         const settingsPayload: any = {};
@@ -35,30 +35,22 @@ export async function cloneSettings(ctx: CloneContext) {
         }
 
         if (Object.keys(settingsPayload).length > 0) {
-            for (let attempt = 0; attempt < 5; attempt++) {
-                try {
+            try {
+                await taskQueue.execute(async () => {
                     await RestAPI.patch({
                         url: `/guilds/${newGuildId}`,
                         body: settingsPayload
                     });
-                    break;
-                } catch (patchError: any) {
-                    let errCode = patchError?.body?.code;
-                    if (!errCode && patchError?.text) {
-                        try { errCode = JSON.parse(patchError.text).code; } catch (_) { }
-                    }
-                    if (errCode === 40006) {
-                        console.warn("[ServerCloner] Guild settings update blocked by Discord (40006). Skipping retry.");
-                        break;
-                    }
-
-                    if (attempt < 4 && (patchError?.status === 403 || patchError?.status === 429)) {
-                        const backoff = 5000 + (attempt * 3000);
-                        console.warn(`[ServerCloner] Guild settings PATCH failed (attempt ${attempt + 1}/5), retrying in ${backoff / 1000}s...`);
-                        await sleep(backoff);
-                    } else {
-                        throw patchError;
-                    }
+                }, undefined, undefined, 5);
+            } catch (patchError: any) {
+                let errCode = patchError?.body?.code;
+                if (!errCode && patchError?.text) {
+                    try { errCode = JSON.parse(patchError.text).code; } catch (_) { }
+                }
+                if (errCode === 40006) {
+                    console.warn("[ServerCloner] Guild settings update blocked by Discord (40006).");
+                } else {
+                    throw patchError;
                 }
             }
         }
@@ -83,9 +75,11 @@ export async function cloneSettings(ctx: CloneContext) {
             updateWithTime("Syncing channel positions...", settingsProgressEnd - 2);
             const chunkSize = 50;
             for (let i = 0; i < positionUpdates.length; i += chunkSize) {
-                await RestAPI.patch({
-                    url: `/guilds/${newGuildId}/channels`,
-                    body: positionUpdates.slice(i, i + chunkSize)
+                await taskQueue.execute(async () => {
+                    await RestAPI.patch({
+                        url: `/guilds/${newGuildId}/channels`,
+                        body: positionUpdates.slice(i, i + chunkSize)
+                    });
                 });
             }
         }

@@ -6,7 +6,7 @@ import { state, throwIfCancelled } from "../store";
 import { CloneContext } from "./types";
 
 export async function cloneOnboarding(ctx: CloneContext) {
-    const { sourceGuild, newGuildId, channelIdMap, roleIdMap, channelRateLimiter, onboardingProgressStart } = ctx;
+    const { sourceGuild, newGuildId, channelIdMap, roleIdMap, taskQueue, onboardingProgressStart } = ctx;
 
     try {
         updateWithTime(`Cloning onboarding settings...`, onboardingProgressStart);
@@ -79,7 +79,7 @@ export async function cloneOnboarding(ctx: CloneContext) {
                 });
             };
 
-            await channelRateLimiter.execute(async () => {
+            await taskQueue.execute(async () => {
                 try {
                     await doOnboardingPut(onboarding.enabled);
                 } catch (err: any) {
@@ -115,13 +115,15 @@ export async function cloneOnboarding(ctx: CloneContext) {
                         for (const channelId of channelsToFix) {
                             console.log(`[ServerCloner] Auto-fixing @everyone permission for default channel ${channelId}`);
                             try {
-                                await RestAPI.put({
-                                    url: `/channels/${channelId}/permissions/${newGuildId}`,
-                                    body: {
-                                        type: 0,
-                                        allow: "1024",
-                                        deny: "0"
-                                    }
+                                await taskQueue.execute(async () => {
+                                    await RestAPI.put({
+                                        url: `/channels/${channelId}/permissions/${newGuildId}`,
+                                        body: {
+                                            type: 0,
+                                            allow: "1024",
+                                            deny: "0"
+                                        }
+                                    });
                                 });
                                 fixedAny = true;
                             } catch (fixErr) {

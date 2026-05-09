@@ -4,14 +4,22 @@ import { NotificationAction } from "../types";
 import { RestAPI } from "@webpack/common";
 
 export function cleanupContainer() {
-    document.getElementById("cloner-pill-container")?.remove();
+    const container = document.getElementById("vc-pill-container");
+    if (!container) return;
+    container.querySelectorAll(".cloner-pill, .cloner-sub-pill").forEach(el => el.remove());
+    if (container.children.length === 0) container.remove();
 }
 
 export function getPillContainer(): HTMLElement {
+    const existing = document.getElementById("vc-pill-container");
+    if (existing) {
+        state.pillContainer = existing;
+        return existing;
+    }
     if (!state.pillContainer || !document.body.contains(state.pillContainer)) {
         state.pillContainer = document.createElement("div");
-        state.pillContainer.id = "cloner-pill-container";
-        state.pillContainer.className = "cloner-pill-container";
+        state.pillContainer.id = "vc-pill-container";
+        state.pillContainer.className = "vc-pill-container";
         document.body.appendChild(state.pillContainer);
     }
     return state.pillContainer;

@@ -1,6 +1,6 @@
 import { Guild } from "@vencord/discord-types";
 import { CloneOptions } from "../types";
-import { RateLimiter } from "../utils/rateLimiter";
+import { TaskQueue } from "../utils/TaskQueue";
 
 export interface CloneContext {
     sourceGuild: Guild;
@@ -9,8 +9,7 @@ export interface CloneContext {
     options: CloneOptions;
     roleIdMap: Record<string, string>;
     channelIdMap: Record<string, string>;
-    roleRateLimiter: RateLimiter;
-    channelRateLimiter: RateLimiter;
+    taskQueue: TaskQueue;
     estimateChannels: any[];
     estimateRoles: any[];
     rolesProgressStart: number;

@@ -1,7 +1,7 @@
 import { NavigationRouter, RestAPI, GuildStore } from "@webpack/common";
 import { notify, createMainProgressNotification, completeMainProgress, updateProgress, updateWithTime } from "../utils/notifications";
 import { fetchGuildData, fetchGuildRoles, extractChannels, checkGuildExistence } from "../utils/api";
-import { RateLimiter } from "../utils/rateLimiter";
+import { TaskQueue } from "../utils/TaskQueue";
 import { translateError } from "../utils/errorHandler";
 import { state, throwIfCancelled } from "../store";
 import { CloneOptions } from "../types";
@@ -29,8 +29,7 @@ export async function cloneServer(sourceGuild: Guild, options: CloneOptions) {
 
     let skipRoles = false;
 
-    const roleRateLimiter = new RateLimiter(settings.store.channelDelay);
-    const channelRateLimiter = new RateLimiter(settings.store.channelDelay);
+    const taskQueue = new TaskQueue(settings.store.concurrencyLimit || 5);
 
     try {
         const guild = GuildStore.getGuild(sourceGuild.id);
@@ -41,7 +40,6 @@ export async function cloneServer(sourceGuild: Guild, options: CloneOptions) {
         const estimateRoles = options.cloneRoles ? await fetchGuildRoles(sourceGuild.id) : [];
         let channelCount = estimateChannels.length;
         let roleCount = estimateRoles.length - 1;
-        const delayMs = settings.store.channelDelay;
 
         if (options.targetGuildId && options.resumeMode) {
             try {
@@ -95,8 +93,8 @@ export async function cloneServer(sourceGuild: Guild, options: CloneOptions) {
         if (options.cloneOnboarding) apiCalls += 2;
         apiCalls += 1;
 
-        const avgDelaySeconds = (delayMs * 1.25) / 1000;
-        let estimatedSeconds = Math.max(10, Math.ceil((apiCalls * avgDelaySeconds) + sleepSeconds));
+        const apiDuration = apiCalls * 0.5 * (5 / (settings.store.concurrencyLimit || 5));
+        let estimatedSeconds = Math.max(10, Math.ceil(apiDuration + sleepSeconds));
 
         const formatTime = (s: number) => {
             const time = Math.max(0, Math.floor(s));
@@ -179,7 +177,7 @@ export async function cloneServer(sourceGuild: Guild, options: CloneOptions) {
             updateWithTime(`Preparing target server...`, 10);
 
             if (!options.resumeMode) {
-                const overwriteLimiter = new RateLimiter(1000);
+                const overwriteQueue = new TaskQueue(3);
                 if (options.cloneChannels) {
                     try {
                         await RestAPI.patch({
@@ -196,7 +194,7 @@ export async function cloneServer(sourceGuild: Guild, options: CloneOptions) {
                         deletedCount++;
                         updateWithTime(`Deleting channel ${deletedCount}/${existingChannels.length}: ${channel.name}`, 10);
                         try {
-                            await overwriteLimiter.execute(() => RestAPI.del({ url: `/channels/${channel.id}` }), msg => updateWithTime(`Deleting channel: ${channel.name} (${msg})`, 10), () => !state.isCloning);
+                            await overwriteQueue.execute(() => RestAPI.del({ url: `/channels/${channel.id}` }), msg => updateWithTime(`Deleting channel: ${channel.name} (${msg})`, 10), () => !state.isCloning);
                         } catch (e: any) {
                             if (e?.message === "Cancelled") break;
                         }
@@ -213,7 +211,7 @@ export async function cloneServer(sourceGuild: Guild, options: CloneOptions) {
                         deletedRoles++;
                         updateWithTime(`Deleting role ${deletedRoles}/${deletableRoles.length}: ${role.name}`, 10);
                         try {
-                            await overwriteLimiter.execute(() => RestAPI.del({ url: `/guilds/${newGuildId}/roles/${role.id}` }), msg => updateWithTime(`Deleting role: ${role.name} (${msg})`, 10), () => !state.isCloning);
+                            await overwriteQueue.execute(() => RestAPI.del({ url: `/guilds/${newGuildId}/roles/${role.id}` }), msg => updateWithTime(`Deleting role: ${role.name} (${msg})`, 10), () => !state.isCloning);
                         } catch (e: any) {
                             if (e?.message === "Cancelled") break;
                         }
@@ -278,8 +276,7 @@ export async function cloneServer(sourceGuild: Guild, options: CloneOptions) {
             options,
             roleIdMap: {},
             channelIdMap: {},
-            roleRateLimiter,
-            channelRateLimiter,
+            taskQueue,
             estimateChannels,
             estimateRoles,
             rolesProgressStart: rolesProgress.start,
@@ -329,7 +326,7 @@ export async function cloneServer(sourceGuild: Guild, options: CloneOptions) {
                 if (splashBase64) updatePayload.splash = splashBase64;
                 if (fullGuildData?.description) updatePayload.description = fullGuildData.description;
 
-                await channelRateLimiter.execute(async () => {
+                await taskQueue.execute(async () => {
                     await RestAPI.patch({ url: `/guilds/${newGuildId}`, body: updatePayload });
                 });
             } catch (e) { }

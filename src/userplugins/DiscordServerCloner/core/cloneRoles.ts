@@ -7,7 +7,7 @@ import { state, throwIfCancelled } from "../store";
 import { CloneContext } from "./types";
 
 export async function extractAndCloneEmojis(ctx: CloneContext) {
-    const { sourceGuild, fullGuildData, options, estimateRoles, estimateChannels, newGuildId } = ctx;
+    const { sourceGuild, fullGuildData, options, estimateRoles, estimateChannels, newGuildId, taskQueue } = ctx;
     const customEmojiIds = new Set<string>();
 
     const addEmojisFromText = (text: string | null | undefined) => {
@@ -79,20 +79,18 @@ export async function extractAndCloneEmojis(ctx: CloneContext) {
             }
 
             let emojiStep = 0;
-            for (const emoji of emojisToClone) {
-                if (!state.isCloning) break;
-                emojiStep++;
+            const emojiPromises = emojisToClone.map(async (emoji: any) => {
+                if (!state.isCloning) return;
 
                 if (options.resumeMode) {
                     const existing = targetEmojis.find(e => e.name === emoji.name);
                     if (existing) {
                         state.emojiIdMap[emoji.id] = existing.id;
+                        emojiStep++;
                         updateWithTime(`Skipping existing emoji (${emojiStep}/${emojisToClone.length})...`, 20 + (emojiStep / emojisToClone.length) * 5);
-                        continue;
+                        return;
                     }
                 }
-
-                updateWithTime(`Cloning used emojis (${emojiStep}/${emojisToClone.length})...`, 20 + (emojiStep / emojisToClone.length) * 5);
 
                 try {
                     const ext = emoji.animated ? "gif" : "png";
@@ -105,23 +103,29 @@ export async function extractAndCloneEmojis(ctx: CloneContext) {
                             : Buffer.from(buffer).toString('base64');
                         const imageStr = `data:image/${ext};base64,${base64}`;
 
-                        const createResp = await RestAPI.post({
-                            url: `/guilds/${newGuildId}/emojis`,
-                            body: {
-                                name: emoji.name,
-                                image: imageStr,
-                                roles: []
+                        await taskQueue.execute(async () => {
+                            const createResp = await RestAPI.post({
+                                url: `/guilds/${newGuildId}/emojis`,
+                                body: {
+                                    name: emoji.name,
+                                    image: imageStr,
+                                    roles: []
+                                }
+                            });
+                            if (createResp?.body?.id) {
+                                state.emojiIdMap[emoji.id] = createResp.body.id;
                             }
-                        });
-                        if (createResp?.body?.id) {
-                            state.emojiIdMap[emoji.id] = createResp.body.id;
-                            await sleep(1500);
-                        }
+                        }, (msg) => updateWithTime(msg, 20 + (emojiStep / emojisToClone.length) * 5));
+                        
+                        emojiStep++;
+                        updateWithTime(`Cloned emoji ${emoji.name} (${emojiStep}/${emojisToClone.length})...`, 20 + (emojiStep / emojisToClone.length) * 5);
                     }
                 } catch (e) {
                     handleCloneError("Emoji", e, emoji.name);
                 }
-            }
+            });
+
+            await Promise.all(emojiPromises);
         } catch (e) {
             console.warn("[ServerCloner] Failed to fetch source emojis for extraction:", e);
         }
@@ -130,7 +134,7 @@ export async function extractAndCloneEmojis(ctx: CloneContext) {
 
 export async function cloneRoles(ctx: CloneContext): Promise<number> {
     let rolesFailed = 0;
-    const { sourceGuild, newGuildId, options, estimateRoles, rolesProgressStart, rolesProgressEnd, roleRateLimiter, roleIdMap } = ctx;
+    const { sourceGuild, newGuildId, options, estimateRoles, rolesProgressStart, rolesProgressEnd, taskQueue, roleIdMap } = ctx;
     
     let skipRoles = false;
     if (state.mainProgressNotificationId) {
@@ -192,18 +196,13 @@ export async function cloneRoles(ctx: CloneContext): Promise<number> {
     const canUseRoleIcons = targetTier >= 2;
 
     let roleStep = 0;
-    for (const role of rolesToCreate) {
-        if (!state.isCloning) break;
-        if (skipRoles) {
-            updateWithTime(`Skipping roles...`, rolesProgressEnd);
-            break;
-        }
+    const rolePromises = rolesToCreate.map(async (role: any) => {
+        if (!state.isCloning) return;
+        if (skipRoles) return;
 
         try {
             checkGuildExistence(sourceGuild.id, newGuildId);
-            roleStep++;
-            updateWithTime(`${actionLabel} role ${roleStep}/${rolesToCreate.length}: ${role.name}`, rolesProgressStart + ((roleStep / Math.max(rolesToCreate.length, 1)) * (rolesProgressEnd - rolesProgressStart)));
-
+            
             const rolePayload: any = {
                 name: replaceEmojis(role.name),
                 permissions: role.permissions.toString(),
@@ -227,7 +226,7 @@ export async function cloneRoles(ctx: CloneContext): Promise<number> {
                 }
             }
 
-            const response = await roleRateLimiter.execute(async () => {
+            const response = await taskQueue.execute(async () => {
                 try {
                     return await RestAPI.post({ url: `/guilds/${newGuildId}/roles`, body: rolePayload });
                 } catch (e: any) {
@@ -242,21 +241,28 @@ export async function cloneRoles(ctx: CloneContext): Promise<number> {
                     }
                     throw e;
                 }
-            }, undefined, () => skipRoles, 5);
+            }, (msg) => updateWithTime(msg, rolesProgressStart + ((roleStep / Math.max(rolesToCreate.length, 1)) * (rolesProgressEnd - rolesProgressStart))), () => skipRoles, 5);
 
             if (response?.body?.id) {
                 roleIdMap[role.id] = response.body.id;
             }
+            
+            roleStep++;
+            updateWithTime(`${actionLabel} role ${roleStep}/${rolesToCreate.length}: ${role.name}`, rolesProgressStart + ((roleStep / Math.max(rolesToCreate.length, 1)) * (rolesProgressEnd - rolesProgressStart)));
+
         } catch (e: any) {
             if (e?.rateLimitExhausted) {
                 rolesFailed += (rolesToCreate.length - roleStep);
                 updateWithTime(`Rate limited, skipping remaining roles...`, rolesProgressEnd);
-                break;
+                skipRoles = true;
+                return;
             }
             rolesFailed++;
             handleCloneError("Role", e, role.name);
         }
-    }
+    });
+
+    await Promise.all(rolePromises);
 
     if (options.resumeMode && rolesToCreate.length === 0) {
         updateWithTime(`All roles already exist, skipping...`, rolesProgressEnd);
