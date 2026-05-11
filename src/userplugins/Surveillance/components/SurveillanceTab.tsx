@@ -15,7 +15,7 @@ import { classes } from "@utils/misc";
 import { ModalCloseButton, ModalContent, ModalHeader, type ModalProps, ModalRoot, ModalSize, openModal } from "@utils/modal";
 import { ChannelStore, GuildStore, React, Select, TextInput, Toasts, useEffect, useMemo, UserStore, useState, useStateFromStores } from "@webpack/common";
 
-import { addServerTarget, getServerTargets, getTargets, removeServerTarget, removeTarget, setTargets, subscribeServerTargets, subscribeTargets } from "..";
+import { addServerTarget, getServerTargets, getTargets, removeServerTarget, removeTarget, setTargets, settings, subscribeServerTargets, subscribeTargets } from "..";
 import { clearEvents, getEvents, loadEvents, subscribe } from "../store";
 import type { SurveillanceEvent, SurveillanceEventType } from "../types";
 
@@ -253,7 +253,7 @@ function SurveillanceTab() {
     const guilds = useStateFromStores([GuildStore], () => GuildStore.getGuildsArray());
 
     useEffect(() => {
-        void loadEvents().then(() => setEvents([...getEvents()]));
+        void loadEvents(settings.store.maxEvents).then(() => setEvents([...getEvents()]));
 
         const unsubscribeEvents = subscribe(() => setEvents([...getEvents()]));
         const unsubscribeTargets = subscribeTargets(() => setLocalTargets([...getTargets()]));

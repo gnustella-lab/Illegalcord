@@ -15,7 +15,7 @@ import type { Activity, Channel, Guild, GuildMember, Message, OnlineStatus, Role
 import { ActivityType } from "@vencord/discord-types/enums";
 import { ChannelStore, GuildStore, Menu, PresenceStore, SettingsRouter, UserStore } from "@webpack/common";
 
-import { loadEvents, recordEvent, trimEvents } from "./store";
+import { recordEvent, trimEvents } from "./store";
 import type { MessageSnapshot, SurveillanceEvent, SurveillanceEventType, SurveillanceScope, VoiceState, VoiceStateFlag } from "./types";
 
 const SETTINGS_ENTRY_KEY = "illegalcord_surveillance";
@@ -847,7 +847,6 @@ export default definePlugin({
         updateTargets(settings.store.targets);
         updateServerTargets(settings.store.serverTargets);
         seedPresence();
-        void loadEvents();
         PresenceStore.addChangeListener(handlePresenceChange);
 
         if (!SettingsPlugin.customEntries.some(entry => entry.key === SETTINGS_ENTRY_KEY)) {
