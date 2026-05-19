@@ -47,6 +47,10 @@ const cl = classNameFactory("vc-crash-handler-enhanced-");
 const logger = new Logger("CrashHandlerEnhanced");
 const SETTINGS_KEYS: Array<"lastCrashAt" | "crashCount"> = ["lastCrashAt", "crashCount"];
 const PROTECTED_PLUGIN_NAMES = new Set([PLUGIN_NAME, "CrashHandler"]);
+const NO_PLUGIN_DETECTED = "No plugin detected";
+const NO_PLUGIN_DETECTION_REASON = "The crash stack did not match any enabled plugin.";
+const NO_PLUGIN_DISABLED = "None";
+const NO_PLUGIN_DISABLE_REASON = "No plugin was disabled.";
 const Native = VencordNative.pluginHelpers.CrashHandlerEnhanced as PluginNative<typeof NativeModule> | undefined;
 
 interface CrashBoundary {
@@ -73,10 +77,10 @@ interface CrashReport {
     crashCount: number;
     recentCrashCount: number;
     recovered: boolean;
-    suspectedPlugin?: string;
-    suspectedPluginReason?: string;
-    disabledPlugin?: string;
-    disableReason?: string;
+    suspectedPlugin: string;
+    suspectedPluginReason: string;
+    disabledPlugin: string;
+    disableReason: string;
     logFilePath?: string;
 }
 
@@ -180,7 +184,9 @@ let hasPromptedForUpdate = false;
 let isRecovering = false;
 let crashModalOpen = false;
 let latestReport: CrashReport | null = null;
+let queuedPopupReport: CrashReport | null = null;
 let recentCrashTimes: number[] = [];
+let crashLogWriteQueue: Promise<void> = Promise.resolve();
 
 function isDraftTypes(value: unknown): value is DraftTypes {
     if (!value || typeof value !== "object") return false;
@@ -251,7 +257,11 @@ function createReport(errorState: CrashErrorState): CrashReport {
         channelId: getChannelId(),
         crashCount: totalCrashes,
         recentCrashCount: recentCrashTimes.length,
-        recovered: false
+        recovered: false,
+        suspectedPlugin: NO_PLUGIN_DETECTED,
+        suspectedPluginReason: NO_PLUGIN_DETECTION_REASON,
+        disabledPlugin: NO_PLUGIN_DISABLED,
+        disableReason: NO_PLUGIN_DISABLE_REASON
     };
 }
 
@@ -262,7 +272,11 @@ function createPlaceholderReport(): CrashReport {
         message: "No crash report available.",
         crashCount: Number(settings.store.crashCount || "0"),
         recentCrashCount: 0,
-        recovered: false
+        recovered: false,
+        suspectedPlugin: NO_PLUGIN_DETECTED,
+        suspectedPluginReason: NO_PLUGIN_DETECTION_REASON,
+        disabledPlugin: NO_PLUGIN_DISABLED,
+        disableReason: NO_PLUGIN_DISABLE_REASON
     };
 }
 
@@ -275,10 +289,10 @@ function formatReport(report: CrashReport) {
         `Recovered: ${report.recovered ? "Yes" : "No"}`,
         `Channel: ${report.channelId ?? "Unknown"}`,
         `Error: ${report.message}`,
-        `Suspected plugin: ${report.suspectedPlugin ?? "Unknown"}`,
-        `Suspected plugin reason: ${report.suspectedPluginReason ?? "N/A"}`,
-        `Disabled plugin: ${report.disabledPlugin ?? "None"}`,
-        `Disable reason: ${report.disableReason ?? "N/A"}`,
+        `Suspected plugin: ${report.suspectedPlugin}`,
+        `Suspected plugin reason: ${report.suspectedPluginReason}`,
+        `Disabled plugin: ${report.disabledPlugin}`,
+        `Disable reason: ${report.disableReason}`,
         `Log file: ${report.logFilePath ?? "Not written yet"}`,
         `Illegalcord version: ${VERSION}`,
         `User agent: ${navigator.userAgent}`,
@@ -361,7 +375,7 @@ function detectSuspectedPlugin(errorState: CrashErrorState): PluginDetection | u
 }
 
 function maybeDisableSuspectedPlugin(report: CrashReport) {
-    if (!settings.store.autoDisableCrashedPlugins || !report.suspectedPlugin) return;
+    if (!settings.store.autoDisableCrashedPlugins || report.suspectedPlugin === NO_PLUGIN_DETECTED) return;
 
     const plugin = Plugins[report.suspectedPlugin];
     const pluginSettings = Settings.plugins[report.suspectedPlugin];
@@ -394,15 +408,19 @@ function buildCrashLogContents(report: CrashReport) {
     }, null, 2);
 }
 
-async function writeCrashLog(report: CrashReport) {
+function writeCrashLog(report: CrashReport) {
     if (!settings.store.logCrashesToDisk || !Native?.writeCrashLog) return;
 
-    try {
-        report.logFilePath = await Native.writeCrashLog(buildCrashLogContents(report), report.id);
-        saveReport(report);
-    } catch (err) {
-        logger.error("Failed to write crash log.", err);
-    }
+    crashLogWriteQueue = crashLogWriteQueue
+        .catch(err => logger.error("Previous crash log write failed.", err))
+        .then(async () => {
+            try {
+                report.logFilePath = await Native.writeCrashLog(buildCrashLogContents(report), report.id);
+                saveReport(report);
+            } catch (err) {
+                logger.error("Failed to write crash log.", err);
+            }
+        });
 }
 
 function openCrashLogsFolder() {
@@ -434,9 +452,10 @@ function handleCrash(boundary: CrashBoundary, errorState: CrashErrorState) {
     }
 
     saveReport(report);
+    writeCrashLog(report);
 
     if (isRecovering) {
-        void writeCrashLog(report);
+        queuedPopupReport = report;
         return;
     }
 
@@ -454,8 +473,10 @@ function handleCrash(boundary: CrashBoundary, errorState: CrashErrorState) {
 
         report.recovered = settings.store.recoverClient ? recoverCrashBoundary(boundary) : false;
         saveReport(report);
-        void writeCrashLog(report);
+        writeCrashLog(report);
         isRecovering = false;
+        const popupReport = queuedPopupReport ?? report;
+        queuedPopupReport = null;
 
         if (settings.store.showRecoveryToast) {
             try {
@@ -470,7 +491,7 @@ function handleCrash(boundary: CrashBoundary, errorState: CrashErrorState) {
             }
         }
 
-        openCrashSupportModal(report);
+        openCrashSupportModal(popupReport);
     }, 50);
 }
 
@@ -552,16 +573,15 @@ function CrashSupportModal({ modalProps, report }: CrashSupportModalProps) {
                         <BaseText tag="p" size="sm" color="text-muted" className={cl("error")}>
                             {report.message}
                         </BaseText>
-                        {!!report.suspectedPlugin && (
-                            <BaseText tag="p" size="sm" color="text-muted" className={cl("error")}>
-                                Suspected plugin: {report.suspectedPlugin}
-                            </BaseText>
-                        )}
-                        {!!report.disabledPlugin && (
-                            <BaseText tag="p" size="sm" color="text-muted" className={cl("error")}>
-                                Disabled plugin: {report.disabledPlugin}
-                            </BaseText>
-                        )}
+                        <BaseText tag="p" size="sm" color="text-muted" className={cl("error")}>
+                            Suspected plugin: {report.suspectedPlugin}
+                        </BaseText>
+                        <BaseText tag="p" size="sm" color="text-muted" className={cl("error")}>
+                            Detection: {report.suspectedPluginReason}
+                        </BaseText>
+                        <BaseText tag="p" size="sm" color="text-muted" className={cl("error")}>
+                            Disabled plugin: {report.disabledPlugin}
+                        </BaseText>
                     </div>
 
                     <Flex justifyContent="space-between" flexWrap="wrap" gap="8px" className={cl("footer")}>
@@ -699,12 +719,12 @@ export default definePlugin({
             find: "#{intl::ERRORS_UNEXPECTED_CRASH}",
             replacement: [
                 {
-                    match: /this\.setState\((\i)\)/,
+                    match: /this\.setState\((.{0,300}?)\)/,
                     replace: "$self.handleCrash(this,$1);$&",
                     noWarn: true
                 },
                 {
-                    match: /Vencord\.Plugins\.plugins\["CrashHandler"\]\.handleCrash\(this,(\i)\);/,
+                    match: /Vencord\.Plugins\.plugins\["CrashHandler"\]\.handleCrash\(this,(.{0,300}?)\);/,
                     replace: "$self.handleCrash(this,$1);$&",
                     noWarn: true
                 }
