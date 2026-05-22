@@ -17,14 +17,15 @@
 */
 
 import { definePluginSettings } from "@api/Settings";
+import { Devs } from "@utils/constants";
+import definePlugin, { OptionType } from "@utils/types";
+import { findComponentByCodeLazy } from "@webpack";
+
 import { PluginInfo } from "../betterMicrophone.desktop/constants";
 import { openMicrophoneSettingsModal } from "../betterMicrophone.desktop/modals";
 import { MicrophonePatcher } from "../betterMicrophone.desktop/patchers";
 import { initMicrophoneStore } from "../betterMicrophone.desktop/stores";
 import { Emitter, MicrophoneSettingsIcon } from "../philsPluginLibrary";
-import { Devs } from "@utils/constants";
-import definePlugin, { OptionType } from "@utils/types";
-import { findComponentByCodeLazy } from "@webpack";
 
 const Button = findComponentByCodeLazy(".NONE,disabled:", ".PANEL_BUTTON");
 
@@ -33,7 +34,7 @@ function micSettingsButton() {
     if (hideSettingsIcon) return null;
     return (
         <Button
-            tooltipText="Change screenshare settings"
+            tooltipText="Change microphone settings"
             icon={MicrophoneSettingsIcon}
             role="button"
             onClick={openMicrophoneSettingsModal}
@@ -44,7 +45,7 @@ function micSettingsButton() {
 const settings = definePluginSettings({
     hideSettingsIcon: {
         type: OptionType.BOOLEAN,
-        description: "Hide the settings icon",
+        description: "Hide the settings icon.",
         default: true,
     }
 });
@@ -53,7 +54,7 @@ export default definePlugin({
     name: "BetterMicrophone",
     description: "This plugin allows you to further customize your microphone.",
     tags: ["Voice", "Customisation"],
-    authors: [Devs.philhk],
+    authors: [Devs.phil],
     dependencies: ["PhilsPluginLibrary"],
     patches: [
         {
