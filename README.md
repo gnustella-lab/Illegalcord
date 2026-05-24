@@ -12,9 +12,6 @@ Want to get Nitro codes to get free Nitro? We have a built-in plugin to get free
 
 Telegram x News: https://t.me/Illegalcord
 
-### Stereo Method
-Download : https://github.com/ProdHallow/Discord-Stereo-Installer/blob/main/Stereo%20Installer.bat
-
 ### Included Plugins
 
 Our included plugins can be found [here](https://equicord.org/plugins).
