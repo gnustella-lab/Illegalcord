@@ -9,23 +9,37 @@ import "./style.css";
 import { definePluginSettings } from "@api/Settings";
 import ErrorBoundary from "@components/ErrorBoundary";
 import { Heading } from "@components/Heading";
+import { HeadphonesIcon } from "@components/Icons";
 import { Paragraph } from "@components/Paragraph";
+import SettingsPlugin from "@plugins/_core/settings";
 import { EquicordDevs } from "@utils/constants";
+import { removeFromArray } from "@utils/misc";
 import definePlugin, { OptionType, PluginNative, ReporterTestable } from "@utils/types";
-import { Alerts, Button, React, Select, showToast, TextInput, Toasts } from "@webpack/common";
+import { Alerts, Button, React, Select, SettingsRouter, showToast, TextInput, Toasts } from "@webpack/common";
 
 import type { ActionInfo, InstallInfo, NativeResult, StereoMethod2Quality } from "./native";
 
 const Native = VencordNative.pluginHelpers.StereoInstaller as PluginNative<typeof import("./native")>;
-const SOURCE_URL = "https://github.com/ProdHallow/Discord-Stereo-Windows-MacOS-Linux";
-const METHOD_2_SERVICE_URL = "https://discord-voice.xyz/";
-const METHOD_2_TUTORIAL_URL = "https://www.youtube.com/watch?v=zSIIganbZxg";
+const SETTINGS_ENTRY_KEY = "illegalcord_stereo_installer";
+const DISCORD_AUDIO_COLLECTIVE_SOURCE_URL = "https://github.com/ProdHallow/Discord-Stereo-Windows-MacOS-Linux";
+const VOICE_PLAYGROUND_SOURCE_URL = "https://codeberg.org/UnpackedX/Discord-Experimental-Subsystem";
+const VOICE_PLAYGROUND_TUTORIAL_URL = "https://www.youtube.com/watch?v=zSIIganbZxg";
 
 type InstallerMethod = "method1" | "method2";
 
+const METHOD_LABELS = {
+    method1: "Discord Audio Collective Method",
+    method2: "Voice Playground Method"
+} satisfies Record<InstallerMethod, string>;
+
+const METHOD_LAST_PATCH_KEYS = {
+    method1: "discordAudioCollective",
+    method2: "voicePlayground"
+} satisfies Record<InstallerMethod, keyof InstallInfo["lastPatchLabels"]>;
+
 const METHOD_OPTIONS = [
-    { label: "Stereo Installer", value: "method1" },
-    { label: "Stereo Installer 2", value: "method2" }
+    { label: METHOD_LABELS.method1, value: "method1" },
+    { label: METHOD_LABELS.method2, value: "method2" }
 ] satisfies Array<{ label: string; value: InstallerMethod; }>;
 
 const METHOD_2_QUALITY_OPTIONS = [
@@ -43,34 +57,11 @@ function StereoWarning() {
         <div className="vc-stereo-installer-warning">
             <Heading tag="h3">StereoInstaller warning</Heading>
             <Paragraph>
-                Stereo will be downloaded or installed from third party files. Not every update is always checked or reviewed by me as 100% safe, so be careful and use this plugin only if you accept your own responsibility for what it changes on your client.
+                This plugin replaces local Discord voice files to enable higher audio quality. It keeps a backup so you can restore the original files when needed.
             </Paragraph>
             <Paragraph>
-                Stereo Installer 2 comes from the service discord-voice.xyz. Use only one of the two installers. Do not use both, because mixing them can corrupt Discord voice files and may force you to reinstall the Discord client.
+                Keep one method installed at a time. Revert to the saved backup before switching methods or after a Discord update if voice stops working.
             </Paragraph>
-            <Paragraph>
-                If you get corruption errors, use the index.js file from StereoMethods/Discord-Voice and check the tutorial if you need help fixing it.
-            </Paragraph>
-            <div className="vc-stereo-installer-warning-actions">
-                <Button
-                    color={Button.Colors.PRIMARY}
-                    onClick={() => VencordNative.native.openExternal(SOURCE_URL)}
-                >
-                    Source code
-                </Button>
-                <Button
-                    color={Button.Colors.PRIMARY}
-                    onClick={() => VencordNative.native.openExternal(METHOD_2_SERVICE_URL)}
-                >
-                    discord-voice.xyz
-                </Button>
-                <Button
-                    color={Button.Colors.PRIMARY}
-                    onClick={() => VencordNative.native.openExternal(METHOD_2_TUTORIAL_URL)}
-                >
-                    Corruption fix tutorial
-                </Button>
-            </div>
         </div>
     );
 }
@@ -92,6 +83,8 @@ function StereoInstallerPanel() {
     const [busy, setBusy] = React.useState(false);
     const [installerMethod, setInstallerMethod] = React.useState<InstallerMethod>("method1");
     const [method2Quality, setMethod2Quality] = React.useState<StereoMethod2Quality>("128");
+    const voicePlaygroundUnavailable = !!info && info.platformKey !== "windows";
+    const selectedLastPatch = info?.lastPatchLabels[METHOD_LAST_PATCH_KEYS[installerMethod]] ?? "--";
 
     async function runNative<T>(action: () => Promise<NativeResult<T>>): Promise<T | null> {
         setBusy(true);
@@ -155,7 +148,7 @@ function StereoInstallerPanel() {
         const isMethod2 = installerMethod === "method2";
 
         Alerts.show({
-            title: isMethod2 ? "Use Stereo Installer 2?" : "Use StereoInstaller?",
+            title: isMethod2 ? "Use Voice Playground Method?" : "Use Discord Audio Collective Method?",
             body: (
                 <div>
                     {isMethod2 ? (
@@ -164,16 +157,16 @@ function StereoInstallerPanel() {
                                 This will use the local {method2Quality} file from StereoMethods/Discord-Voice, rename it to discord_voice.node, and copy it into <code>{"modules\\discord_voice-1\\discord_voice"}</code>.
                             </Paragraph>
                             <Paragraph>
-                                Stereo Installer 2 comes from discord-voice.xyz. Use only one installer method. Using both can corrupt Discord voice files and may force a Discord client reinstall.
+                                Voice Playground Method replaces the local voice module to enable higher audio quality. Use only one method on the same Discord install.
                             </Paragraph>
                         </>
                     ) : (
                         <>
                             <Paragraph>
-                                This will download the patched stereo module from a third party GitHub repository and replace your local discord_voice module after making a backup.
+                                This will download the Discord Audio Collective Method files for your platform, save a backup, and replace the local Discord voice module to enable higher audio quality.
                             </Paragraph>
                             <Paragraph>
-                                I do not guarantee that every upstream update has been personally checked as 100% safe. Continue only if you trust the source and accept responsibility for using it.
+                                Use Revert to restore the saved backup before switching methods or after a Discord update if voice stops working.
                             </Paragraph>
                         </>
                     )}
@@ -188,14 +181,14 @@ function StereoInstallerPanel() {
 
     function confirmMethod2IndexPatch(): void {
         Alerts.show({
-            title: "Replace discord_voice index.js?",
+            title: "Replace Voice Playground index.js?",
             body: (
                 <div>
                     <Paragraph>
                         This will copy index.js from StereoMethods/Discord-Voice into <code>{"modules\\discord_voice-1\\discord_voice"}</code>.
                     </Paragraph>
                     <Paragraph>
-                        Discord will close while the file is replaced. Use this only if you are fixing Stereo Installer 2 corruption or know you need that index.js.
+                        Discord will close while the file is replaced. Use this only if you are fixing Voice Playground Method files or know you need that index.js.
                     </Paragraph>
                 </div>
             ),
@@ -206,21 +199,38 @@ function StereoInstallerPanel() {
         });
     }
 
-    function openSource(): void {
-        VencordNative.native.openExternal(SOURCE_URL);
+    function selectInstallerMethod(value: InstallerMethod): void {
+        if (value === "method2" && voicePlaygroundUnavailable) {
+            setStatus("Voice Playground Method is only available on Windows. Linux support is handled by Discord Audio Collective Method.");
+            showToast("Voice Playground Method is only available on Windows.", Toasts.Type.FAILURE);
+            return;
+        }
+
+        setInstallerMethod(value);
     }
 
-    function openMethod2Service(): void {
-        VencordNative.native.openExternal(METHOD_2_SERVICE_URL);
+    function openDiscordAudioCollectiveSource(): void {
+        VencordNative.native.openExternal(DISCORD_AUDIO_COLLECTIVE_SOURCE_URL);
+    }
+
+    function openVoicePlaygroundSource(): void {
+        VencordNative.native.openExternal(VOICE_PLAYGROUND_SOURCE_URL);
     }
 
     function openMethod2Tutorial(): void {
-        VencordNative.native.openExternal(METHOD_2_TUTORIAL_URL);
+        VencordNative.native.openExternal(VOICE_PLAYGROUND_TUTORIAL_URL);
     }
 
     React.useEffect(() => {
         void autoDetect();
     }, []);
+
+    React.useEffect(() => {
+        if (!voicePlaygroundUnavailable || installerMethod !== "method2") return;
+
+        setInstallerMethod("method1");
+        setStatus("Voice Playground Method is only available on Windows. Linux support is handled by Discord Audio Collective Method.");
+    }, [installerMethod, voicePlaygroundUnavailable]);
 
     return (
         <div className="vc-stereo-installer-root">
@@ -229,11 +239,11 @@ function StereoInstallerPanel() {
                     <div className="vc-stereo-installer-select-row">
                         <div>
                             <span>Installer method</span>
-                            <Paragraph>Use only one method at a time.</Paragraph>
+                            <Paragraph>{voicePlaygroundUnavailable ? "Voice Playground Method is Windows-only." : "Use only one method at a time."}</Paragraph>
                         </div>
                         <Select
                             options={METHOD_OPTIONS}
-                            select={(value: InstallerMethod) => setInstallerMethod(value)}
+                            select={selectInstallerMethod}
                             isSelected={(value: InstallerMethod) => value === installerMethod}
                             serialize={(value: InstallerMethod) => value}
                         />
@@ -242,7 +252,7 @@ function StereoInstallerPanel() {
                     {installerMethod === "method2" && (
                         <div className="vc-stereo-installer-select-row">
                             <div>
-                                <span>Stereo Installer 2 quality</span>
+                                <span>Voice Playground quality</span>
                                 <Paragraph>The selected file will be installed as discord_voice.node.</Paragraph>
                             </div>
                             <Select
@@ -253,20 +263,43 @@ function StereoInstallerPanel() {
                             />
                         </div>
                     )}
+
+                    <div className="vc-stereo-installer-select-row">
+                        <div>
+                            <span>Source code</span>
+                            <Paragraph>Each method has its own upstream source.</Paragraph>
+                        </div>
+                        <div className="vc-stereo-installer-warning-actions">
+                            <Button
+                                color={Button.Colors.PRIMARY}
+                                size={Button.Sizes.SMALL}
+                                onClick={openDiscordAudioCollectiveSource}
+                            >
+                                Discord Audio Collective
+                            </Button>
+                            <Button
+                                color={Button.Colors.PRIMARY}
+                                size={Button.Sizes.SMALL}
+                                onClick={openVoicePlaygroundSource}
+                            >
+                                Voice Playground
+                            </Button>
+                        </div>
+                    </div>
                 </div>
 
                 {installerMethod === "method2" && (
                     <div className="vc-stereo-installer-method2-note">
                         <Paragraph>
-                            Stereo Installer 2 comes from discord-voice.xyz. Do not install both methods on the same client. If Discord voice files get corrupted, use index.js from StereoMethods/Discord-Voice and check the tutorial.
+                            Voice Playground Method uses bundled Windows payloads from StereoMethods/Discord-Voice for higher audio quality. Do not install both methods on the same client. If Discord voice files stop working, use the bundled index.js repair and check the tutorial.
                         </Paragraph>
                         <div className="vc-stereo-installer-warning-actions">
                             <Button
                                 color={Button.Colors.PRIMARY}
                                 size={Button.Sizes.SMALL}
-                                onClick={openMethod2Service}
+                                onClick={openVoicePlaygroundSource}
                             >
-                                discord-voice.xyz
+                                Voice Playground source
                             </Button>
                             <Button
                                 color={Button.Colors.PRIMARY}
@@ -326,14 +359,6 @@ function StereoInstallerPanel() {
                     >
                         Revert to backup
                     </Button>
-                    <Button
-                        color={Button.Colors.PRIMARY}
-                        size={Button.Sizes.SMALL}
-                        disabled={busy}
-                        onClick={openSource}
-                    >
-                        Source code
-                    </Button>
                 </div>
             </div>
 
@@ -343,7 +368,7 @@ function StereoInstallerPanel() {
                     <InfoLine label="Platform" value={`${info.platformLabel} ${info.readableOs}`} />
                     <InfoLine label="Voice module" value={info.voiceDir} />
                     {"logPath" in info && <InfoLine label="Log file" value={info.logPath} />}
-                    <InfoLine label="Last patch" value={info.lastPatchLabel} />
+                    <InfoLine label={`${METHOD_LABELS[installerMethod]} last patch`} value={selectedLastPatch} />
                 </div>
             )}
 
@@ -358,6 +383,15 @@ function StereoInstallerPanel() {
     );
 }
 
+function StereoInstallerPage() {
+    return (
+        <>
+            <StereoWarning />
+            <StereoInstallerPanel />
+        </>
+    );
+}
+
 const settings = definePluginSettings({
     installer: {
         type: OptionType.COMPONENT,
@@ -367,10 +401,28 @@ const settings = definePluginSettings({
 
 export default definePlugin({
     name: "StereoInstaller",
-    description: "Installs and reverts the Discord stereo voice module from the Stereo Hub source.",
+    description: "Installs and reverts the Discord stereo voice module from selected method sources.",
     tags: ["Utility"],
     authors: [EquicordDevs.irritably],
     reporterTestable: ReporterTestable.None,
     settings,
-    settingsAboutComponent: ErrorBoundary.wrap(StereoWarning, { noop: true })
+    settingsAboutComponent: ErrorBoundary.wrap(StereoWarning, { noop: true }),
+    toolboxActions: {
+        "Open StereoInstaller": () => SettingsRouter.openUserSettings(`${SETTINGS_ENTRY_KEY}_panel`),
+    },
+
+    start() {
+        if (SettingsPlugin.customEntries.some(entry => entry.key === SETTINGS_ENTRY_KEY)) return;
+
+        SettingsPlugin.customEntries.push({
+            key: SETTINGS_ENTRY_KEY,
+            title: "StereoInstaller",
+            Component: ErrorBoundary.wrap(StereoInstallerPage, { noop: true }),
+            Icon: HeadphonesIcon,
+        });
+    },
+
+    stop() {
+        removeFromArray(SettingsPlugin.customEntries, entry => entry.key === SETTINGS_ENTRY_KEY);
+    }
 });

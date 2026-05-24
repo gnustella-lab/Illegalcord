@@ -12,7 +12,7 @@ import method384 from "file://StereoMethods/Discord-Voice/(384) discord_voice.no
 import method512 from "file://StereoMethods/Discord-Voice/(512) discord_voice.node?base64&trim=false";
 import method2Index from "file://StereoMethods/Discord-Voice/index.js?base64&trim=false";
 import { appendFileSync, constants, type Dirent, existsSync, mkdirSync } from "fs";
-import { access, cp, mkdir, readdir, readFile, rm, stat, writeFile } from "fs/promises";
+import { access, chmod, cp, mkdir, readdir, readFile, rm, stat, writeFile } from "fs/promises";
 import { arch, homedir, platform as osPlatform, release } from "os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "path";
 
@@ -33,6 +33,7 @@ export interface InstallInfo {
     clientLabel: string;
     buildLabel: string;
     lastPatchLabel: string;
+    lastPatchLabels: LastPatchLabels;
 }
 
 export interface ActionInfo extends InstallInfo {
@@ -40,7 +41,18 @@ export interface ActionInfo extends InstallInfo {
 }
 
 export type StereoMethod2Quality = "128" | "384" | "512";
+type PatchMethod = "discordAudioCollective" | "voicePlayground";
 type SingleFileName = "discord_voice.node" | "index.js";
+
+export interface LastPatchLabels {
+    discordAudioCollective: string;
+    voicePlayground: string;
+}
+
+const PATCH_METHOD_LABELS: Record<PatchMethod, string> = {
+    discordAudioCollective: "Discord Audio Collective Method",
+    voicePlayground: "Voice Playground Method"
+};
 
 export type NativeResult<T> = {
     success: true;
@@ -175,8 +187,8 @@ export async function patch(_: IpcMainInvokeEvent, rootPath: string): Promise<Na
 
         await ensurePermanentUnpatchedBackup(target, log);
         const patchedVoiceDir = await downloadPatchedPayload(log);
-        await scheduleWorker("Patch", patchedVoiceDir, target, true, log);
-        log.ok("Patch scheduled. Discord will close, install stereo, then reopen.");
+        await scheduleWorker("Patch", patchedVoiceDir, target, "discordAudioCollective", log);
+        log.ok("Patch scheduled. Discord will close, install Discord Audio Collective Method, then reopen.");
 
         return ok({ ...await installInfoFromTarget(target), logPath: logPath() }, log.lines);
     } catch (error) {
@@ -191,20 +203,21 @@ export async function patchMethod2(_: IpcMainInvokeEvent, rootPath: string, qual
     try {
         const target = await targetFromRendererRoot(rootPath);
         const methodTarget = await method2Target(target);
+        assertVoicePlaygroundSupported();
 
-        log.info("=== Patch method 2 ===");
+        log.info("=== Patch Voice Playground Method ===");
         log.info(`Discord root: ${methodTarget.discordRoot}`);
         log.info(`Voice dir: ${methodTarget.voiceDir}`);
         log.info(`Stereo quality: ${quality}`);
 
         if (!await looksLikeDiscordVoiceDir(methodTarget.voiceDir)) {
-            throw new Error(`Stereo installer 2 target folder was not found or is incomplete: ${methodTarget.voiceDir}`);
+            throw new Error(`Voice Playground Method target folder was not found or is incomplete: ${methodTarget.voiceDir}`);
         }
 
         await ensurePermanentUnpatchedBackup(methodTarget, log);
         const patchedVoiceDir = await prepareMethod2Payload(quality, log);
-        await scheduleWorker("Patch", patchedVoiceDir, methodTarget, true, log, "singleFile");
-        log.ok("Patch scheduled. Discord will close, install stereo method 2, then reopen.");
+        await scheduleWorker("Patch", patchedVoiceDir, methodTarget, "voicePlayground", log, "singleFile");
+        log.ok("Patch scheduled. Discord will close, install Voice Playground Method, then reopen.");
 
         return ok({ ...await installInfoFromTarget(methodTarget), logPath: logPath() }, log.lines);
     } catch (error) {
@@ -219,18 +232,19 @@ export async function patchMethod2Index(_: IpcMainInvokeEvent, rootPath: string)
     try {
         const target = await targetFromRendererRoot(rootPath);
         const methodTarget = await method2Target(target);
+        assertVoicePlaygroundSupported();
 
-        log.info("=== Patch method 2 index.js ===");
+        log.info("=== Patch Voice Playground index.js ===");
         log.info(`Discord root: ${methodTarget.discordRoot}`);
         log.info(`Voice dir: ${methodTarget.voiceDir}`);
 
         if (!await looksLikeDiscordVoiceDir(methodTarget.voiceDir)) {
-            throw new Error(`Stereo installer 2 target folder was not found or is incomplete: ${methodTarget.voiceDir}`);
+            throw new Error(`Voice Playground Method target folder was not found or is incomplete: ${methodTarget.voiceDir}`);
         }
 
         await ensurePermanentUnpatchedBackup(methodTarget, log);
         const patchedIndexDir = await prepareMethod2IndexPayload(log);
-        await scheduleWorker("Patch", patchedIndexDir, methodTarget, true, log, "singleFile", "index.js");
+        await scheduleWorker("Patch", patchedIndexDir, methodTarget, "voicePlayground", log, "singleFile", "index.js");
         log.ok("Patch scheduled. Discord will close, install index.js, then reopen.");
 
         return ok({ ...await installInfoFromTarget(methodTarget), logPath: logPath() }, log.lines);
@@ -255,7 +269,7 @@ export async function revert(_: IpcMainInvokeEvent, rootPath: string): Promise<N
             throw new Error(`No permanent UNPATCHED backup found at: ${backupDir}. Run Patch once first to create the baseline.`);
         }
 
-        await scheduleWorker("Revert", backupDir, target, false, log);
+        await scheduleWorker("Revert", backupDir, target, undefined, log);
         log.ok("Revert scheduled. Discord will close, restore the backup, then reopen.");
 
         return ok({ ...await installInfoFromTarget(target), logPath: logPath() }, log.lines);
@@ -290,6 +304,12 @@ function platformLabel(key: string): string {
     if (key === "macos") return "macOS";
     if (key === "linux") return "Linux";
     return key ? key[0].toUpperCase() + key.slice(1) : "Unknown";
+}
+
+function assertVoicePlaygroundSupported(): void {
+    if (platformKey() !== "windows") {
+        throw new Error("Voice Playground Method is only available on Windows. Use Discord Audio Collective Method on Linux.");
+    }
 }
 
 function readableOs(): string {
@@ -425,7 +445,8 @@ function defaultDiscordRoots(): string[] {
         join(home, ".config", "discordcanary"),
         join(home, ".config", "discordptb"),
         join(home, ".config", "discorddevelopment"),
-        join(home, ".var", "app", "com.discordapp.Discord", "config", "discord")
+        join(home, ".var", "app", "com.discordapp.Discord", "config", "discord"),
+        join(home, "snap", "discord", "current", ".config", "discord")
     ];
 }
 
@@ -480,13 +501,17 @@ async function looksLikeDiscordVoiceDir(pathValue: string): Promise<boolean> {
 }
 
 function parseAppVersionFromDirName(name: string): number[] {
-    const match = /\bapp-([\d.]+)\b/i.exec(name);
+    const match = /^(?:app-)?([\d.]+)$/i.exec(name);
     if (!match) return [0, 0, 0, 0];
 
     const parts = match[1].split(".").map((part: string) => Number.parseInt(part, 10));
     if (parts.some((part: number) => Number.isNaN(part))) return [0, 0, 0, 0];
     while (parts.length < 4) parts.push(0);
     return parts.slice(0, 4);
+}
+
+function isDiscordAppDirName(name: string): boolean {
+    return /^(?:app-)?\d+(?:\.\d+)*$/i.test(name);
 }
 
 function compareVersionsDescending(a: string, b: string): number {
@@ -509,7 +534,7 @@ async function findDiscordAppDir(discordRoot: string): Promise<string | undefine
     }
 
     const apps = entries
-        .filter((entry: Dirent) => entry.isDirectory() && entry.name.toLowerCase().startsWith("app-"))
+        .filter((entry: Dirent) => entry.isDirectory() && isDiscordAppDirName(entry.name))
         .map((entry: Dirent) => join(discordRoot, entry.name));
 
     apps.sort((a: string, b: string) => compareVersionsDescending(basename(a), basename(b)));
@@ -603,7 +628,7 @@ async function resolveTarget(preferredRoot?: string): Promise<Target | undefined
                 discordRoot: root,
                 voiceDir: found.voiceDir,
                 appDir: found.appDir,
-                exeName: platformKey() === "windows" ? windowsClientExeForRoot(root) : undefined
+                exeName: clientExeForRoot(root)
             };
         }
 
@@ -613,11 +638,18 @@ async function resolveTarget(preferredRoot?: string): Promise<Target | undefined
                 discordRoot: root,
                 voiceDir: fallbackVoiceDir,
                 appDir: found.appDir || await findDiscordAppDir(root),
-                exeName: platformKey() === "windows" ? windowsClientExeForRoot(root) : undefined
+                exeName: clientExeForRoot(root)
             };
         }
     }
 
+    return undefined;
+}
+
+function clientExeForRoot(root: string): string | undefined {
+    const key = platformKey();
+    if (key === "windows") return windowsClientExeForRoot(root);
+    if (key === "linux") return linuxClientExeForRoot(root);
     return undefined;
 }
 
@@ -628,6 +660,14 @@ function windowsClientExeForRoot(root: string): string {
     if (leaf.includes("discordptb")) return "DiscordPTB.exe";
     if (leaf.includes("discorddevelopment")) return "DiscordDevelopment.exe";
     return "Discord.exe";
+}
+
+function linuxClientExeForRoot(root: string): string {
+    const normalized = root.toLowerCase();
+    if (normalized.includes("discordcanary")) return "discord-canary";
+    if (normalized.includes("discordptb")) return "discord-ptb";
+    if (normalized.includes("discorddevelopment")) return "discord-development";
+    return "discord";
 }
 
 function releaseChannelFromRoot(root: string): string | undefined {
@@ -652,7 +692,7 @@ function clientPrefixForRoot(root: string): string {
 
 function buildLabelFromAppDir(appDir?: string): string {
     if (!appDir) return "";
-    const match = /^app-([\d.]+)$/i.exec(basename(appDir));
+    const match = /^(?:app-)?([\d.]+)$/i.exec(basename(appDir));
     if (!match) return "";
 
     const parts = match[1].split(".").filter((part: string) => /^\d+$/.test(part));
@@ -662,6 +702,10 @@ function buildLabelFromAppDir(appDir?: string): string {
 async function installInfoFromTarget(target: Target): Promise<InstallInfo> {
     const buildLabel = buildLabelFromAppDir(target.appDir || await findDiscordAppDir(target.discordRoot));
     const clientPrefix = clientPrefixForRoot(target.discordRoot);
+    const lastPatchLabels: LastPatchLabels = {
+        discordAudioCollective: await lastPatchCaption(target.discordRoot, "discordAudioCollective"),
+        voicePlayground: await lastPatchCaption(target.discordRoot, "voicePlayground")
+    };
 
     return {
         platformKey: platformKey(),
@@ -672,7 +716,8 @@ async function installInfoFromTarget(target: Target): Promise<InstallInfo> {
         appDir: target.appDir,
         clientLabel: clientPrefix && buildLabel ? `${clientPrefix} ${buildLabel}` : clientPrefix || buildLabel || "--",
         buildLabel,
-        lastPatchLabel: await lastPatchCaption(target.discordRoot)
+        lastPatchLabel: lastPatchLabels.discordAudioCollective,
+        lastPatchLabels
     };
 }
 
@@ -684,27 +729,31 @@ function permanentBackupDir(target: Target): string {
     return join(hubDataDir(), "backups", sanitizedRootKey(target.discordRoot), "UNPATCHED");
 }
 
-function metaPathForRoot(discordRoot: string): string {
-    return join(hubDataDir(), "backups", sanitizedRootKey(discordRoot), "quick_hub_meta.json");
+function metaPathForRoot(discordRoot: string, method: PatchMethod): string {
+    const fileName = method === "discordAudioCollective"
+        ? "quick_hub_meta_discord_audio_collective.json"
+        : "quick_hub_meta_voice_playground.json";
+
+    return join(hubDataDir(), "backups", sanitizedRootKey(discordRoot), fileName);
 }
 
-async function lastPatchCaption(discordRoot: string): Promise<string> {
-    const metaPath = metaPathForRoot(discordRoot);
-    if (!await isFile(metaPath)) return "Last patch with this hub: never";
+async function lastPatchCaption(discordRoot: string, method: PatchMethod): Promise<string> {
+    const metaPath = metaPathForRoot(discordRoot, method);
+    if (!await isFile(metaPath)) return "Never";
 
     try {
-        const parsed: unknown = JSON.parse(await readFile(metaPath, "utf8"));
-        if (!isRecord(parsed)) return "Last patch with this hub: could not read saved data";
+        const parsed: unknown = JSON.parse((await readFile(metaPath, "utf8")).trimStart());
+        if (!isRecord(parsed)) return `${PATCH_METHOD_LABELS[method]} saved data could not be read.`;
 
         const iso = typeof parsed.last_patch_utc === "string" ? parsed.last_patch_utc : "";
-        if (!iso) return "Last patch with this hub: never";
+        if (!iso) return "Never";
 
         const date = new Date(iso);
-        if (Number.isNaN(date.getTime())) return `Last patch with this hub: ${iso}`;
+        if (Number.isNaN(date.getTime())) return iso;
 
-        return `Last patch with this hub: ${date.toLocaleString()}`;
+        return date.toLocaleString();
     } catch {
-        return "Last patch with this hub: could not read saved data";
+        return `${PATCH_METHOD_LABELS[method]} saved data could not be read.`;
     }
 }
 
@@ -809,12 +858,12 @@ function patchedGithubApiForPlatform(): string {
     const key = platformKey();
     if (key === "windows") return PATCHED_WINDOWS_GITHUB_CONTENTS_API;
     if (key === "linux") return PATCHED_LINUX_GITHUB_CONTENTS_API;
-    throw new Error("StereoInstaller currently mirrors the hub script support: Windows and Linux patched payloads are available.");
+    throw new Error("Discord Audio Collective Method supports Windows and Linux patched payloads.");
 }
 
 async function method2Target(target: Target): Promise<Target> {
     const appDir = target.appDir || await findDiscordAppDir(target.discordRoot);
-    if (!appDir) throw new Error("Could not find the Discord app folder for stereo installer 2.");
+    if (!appDir) throw new Error("Could not find the Discord app folder for Voice Playground Method.");
 
     const voiceDir = join(appDir, "modules", "discord_voice-1", "discord_voice");
     assertPathInside(target.discordRoot, voiceDir);
@@ -831,7 +880,7 @@ function method2Payload(quality: StereoMethod2Quality): string {
     if (quality === "384") return method384;
     if (quality === "512") return method512;
 
-    throw new Error("Invalid stereo installer 2 quality selected.");
+    throw new Error("Invalid Voice Playground Method quality selected.");
 }
 
 async function prepareMethod2Payload(quality: StereoMethod2Quality, log: ActionLog): Promise<string> {
@@ -845,7 +894,7 @@ async function prepareMethod2Payload(quality: StereoMethod2Quality, log: ActionL
     await writeFile(targetFile, Buffer.from(method2Payload(quality), "base64"));
     validateDownloadPayload("discord_voice.node", await readFile(targetFile));
 
-    log.ok(`Prepared stereo installer 2 payload: ${quality}.`);
+    log.ok(`Prepared Voice Playground Method payload: ${quality}.`);
 
     return staging;
 }
@@ -861,7 +910,7 @@ async function prepareMethod2IndexPayload(log: ActionLog): Promise<string> {
     await writeFile(targetFile, Buffer.from(method2Index, "base64"));
     validateDownloadPayload("index.js", await readFile(targetFile));
 
-    log.ok("Prepared stereo installer 2 index.js payload.");
+    log.ok("Prepared Voice Playground Method index.js payload.");
 
     return staging;
 }
@@ -903,6 +952,9 @@ async function downloadGithubFolderToDir(apiUrl: string, dest: string, log: Acti
             const data = await downloadBytes(entry.download_url, 120_000);
             validateDownloadPayload(entry.name, data);
             await writeFile(targetPath, data);
+            if (platformKey() === "linux" && ["discord_voice.node", "gpu_encoder_helper", "libmediapipe.so"].includes(entry.name)) {
+                await chmod(targetPath, 0o755);
+            }
             downloaded++;
         } catch (error) {
             failed++;
@@ -929,8 +981,8 @@ async function downloadPatchedPayload(log: ActionLog): Promise<string> {
     const staging = join(hubDataDir(), "staging", "patched_payload");
     assertPathInside(hubDataDir(), staging);
 
-    const label = platformKey() === "windows" ? "Windows" : "Linux";
-    log.info(`Fetching the latest patched module for ${label} from GitHub.`);
+    const label = platformLabel(platformKey());
+    log.info(`Fetching the latest Discord Audio Collective Method module for ${label} from GitHub.`);
     await downloadGithubFolderToDir(patchedGithubApiForPlatform(), staging, log);
 
     const payloadVoice = await findVoiceDirInPayloadDir(staging);
@@ -941,7 +993,7 @@ async function downloadPatchedPayload(log: ActionLog): Promise<string> {
     return payloadVoice;
 }
 
-async function scheduleWorker(actionName: "Patch" | "Revert", sourceDir: string, target: Target, writeMeta: boolean, log: ActionLog, copyMode: WorkerConfig["copyMode"] = "directory", fileName: SingleFileName = "discord_voice.node"): Promise<void> {
+async function scheduleWorker(actionName: "Patch" | "Revert", sourceDir: string, target: Target, metaMethod: PatchMethod | undefined, log: ActionLog, copyMode: WorkerConfig["copyMode"] = "directory", fileName: SingleFileName = "discord_voice.node"): Promise<void> {
     assertPathInside(hubDataDir(), sourceDir);
     assertPathInside(target.discordRoot, target.voiceDir);
 
@@ -959,7 +1011,7 @@ async function scheduleWorker(actionName: "Patch" | "Revert", sourceDir: string,
         targetDir: target.voiceDir,
         copyMode,
         fileName: copyMode === "singleFile" ? fileName : undefined,
-        metaPath: writeMeta ? metaPathForRoot(target.discordRoot) : undefined,
+        metaPath: metaMethod ? metaPathForRoot(target.discordRoot, metaMethod) : undefined,
         logPath: logPath(),
         logPaths: logPaths(),
         taskName,
@@ -1382,7 +1434,25 @@ function spawnDetached(file, args, cwd) {
         stdio: "ignore",
         windowsHide: true
     });
+    child.once("error", error => {
+        void error;
+    });
     child.unref();
+}
+
+function linuxRelaunchCommands(relaunchConfig) {
+    const root = String(relaunchConfig.discordRoot || "").toLowerCase();
+    const commands = [];
+
+    if (root.includes(".var/app/com.discordapp.discord")) commands.push(["flatpak", "run", "com.discordapp.Discord"]);
+    if (root.includes("/snap/discord/")) commands.push(["snap", "run", "discord"]);
+    if (relaunchConfig.exeName) commands.push([relaunchConfig.exeName]);
+    if (root.includes("discordcanary")) commands.push(["discord-canary"], ["DiscordCanary"]);
+    if (root.includes("discordptb")) commands.push(["discord-ptb"], ["DiscordPTB"]);
+    if (root.includes("discorddevelopment")) commands.push(["discord-development"], ["DiscordDevelopment"]);
+
+    commands.push(["discord"], ["Discord"], ["flatpak", "run", "com.discordapp.Discord"], ["snap", "run", "discord"]);
+    return commands;
 }
 
 function relaunch(config) {
@@ -1412,7 +1482,7 @@ function relaunch(config) {
     }
 
     if (relaunchConfig.platformKey === "linux") {
-        for (const cmd of [["discord"], ["Discord"], ["flatpak", "run", "com.discordapp.Discord"]]) {
+        for (const cmd of linuxRelaunchCommands(relaunchConfig)) {
             try {
                 spawnDetached(cmd[0], cmd.slice(1));
                 return "Relaunched Discord.";
