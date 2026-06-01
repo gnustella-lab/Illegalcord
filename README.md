@@ -31,6 +31,7 @@ Our included plugins can be found [here](https://equicord.org/plugins).
 - **BetterMic**
 - **BetterScreenshare**
 - **StaffDetector**
+- **Anon.li Drop** | Bypass Discord limits for sharing files + Security & Privacy minded https://anon.li/
 - **BigFileUpload**
 - **Stalker**
 - **FastGifPicker**
