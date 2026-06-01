@@ -512,7 +512,7 @@ function SurveillanceTab() {
     const copyEvents = () => {
         try {
             void Promise.resolve(copyToClipboard(JSON.stringify(filteredEvents, null, 2))).then(
-                () => toast("Surveillance events copied."),
+                () => toast(`${pageHeading} events copied.`),
                 () => toast("Failed to copy surveillance events.", Toasts.Type.FAILURE)
             );
         } catch {
@@ -521,8 +521,11 @@ function SurveillanceTab() {
     };
 
     const resetEvents = () => {
-        void clearEvents().then(() => toast("Surveillance events cleared."));
+        void clearEvents(page === "server" ? "server" : "person").then(() => toast(`${pageHeading} events cleared.`));
     };
+
+    const exportLabel = page === "server" ? "Export Server JSON" : "Export User JSON";
+    const clearEventsLabel = page === "server" ? "Clear Server Events" : "Clear User Events";
 
     return (
         <SettingsTab>
@@ -530,8 +533,8 @@ function SurveillanceTab() {
                 <div className={cl("header")}>
                     <HeadingPrimary>Surveillance</HeadingPrimary>
                     <div className={cl("actions")}>
-                        <button className={cl("action")} onClick={copyEvents}>Export JSON</button>
-                        <button className={classes(cl("action"), cl("danger"))} onClick={resetEvents}>Clear</button>
+                        <button className={cl("action")} onClick={copyEvents}>{exportLabel}</button>
+                        <button className={classes(cl("action"), cl("danger"))} onClick={resetEvents}>{clearEventsLabel}</button>
                     </div>
                 </div>
 

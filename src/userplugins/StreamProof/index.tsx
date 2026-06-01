@@ -30,6 +30,9 @@ interface StreamEvent {
 let manualEnabled = false;
 let autoEnabled = false;
 let autoSuppressedForStream = false;
+let lastAppliedActive: boolean | undefined;
+let lastStyleSource = "";
+let styleDirty = true;
 const revealedMessageIds = new Set<string>();
 const stateListeners = new Set<() => void>();
 
@@ -126,8 +129,7 @@ function getMessageHoverRevealRule() {
     if (settings.store.protectUsernames) {
         selectors.push(
             `${MESSAGE_ROW_SELECTOR}:hover [id^="message-username-"]`,
-            `${MESSAGE_ROW_SELECTOR}:hover [id^="message-reply-context-"]`,
-            `${MESSAGE_ROW_SELECTOR}:has(+ ${MESSAGE_ROW_SELECTOR}:hover) [id^="message-username-"]`
+            `${MESSAGE_ROW_SELECTOR}:hover [id^="message-reply-context-"]`
         );
     }
 
@@ -175,12 +177,24 @@ function buildStyle() {
 }
 
 function syncStyle() {
+    if (!styleDirty) return false;
+
+    const source = buildStyle();
+    if (source === lastStyleSource) {
+        styleDirty = false;
+        return false;
+    }
+
     const managedStyle = requireStyle(style);
-    managedStyle.source = buildStyle();
+    managedStyle.source = source;
+    lastStyleSource = source;
+    styleDirty = false;
 
     if (isStyleEnabled(style)) {
         compileStyle(managedStyle);
     }
+
+    return true;
 }
 
 function showStateToast(active: boolean) {
@@ -191,33 +205,47 @@ function showStateToast(active: boolean) {
 
 function applyStreamProof(showFeedback = false) {
     const active = isStreamProofActive();
+    const activeChanged = active !== lastAppliedActive;
 
-    if (!active) {
+    if (!active && revealedMessageIds.size) {
         revealedMessageIds.clear();
+        styleDirty = true;
     }
 
-    syncStyle();
+    if (active) syncStyle();
 
-    if (active) enableStyle(style);
-    else disableStyle(style);
+    if (active && !isStyleEnabled(style)) enableStyle(style);
+    else if (!active && isStyleEnabled(style)) disableStyle(style);
 
     if (showFeedback) showStateToast(active);
-    emitStateChange();
+    if (activeChanged) {
+        lastAppliedActive = active;
+        emitStateChange();
+    }
 }
 
 function syncAutoState() {
+    let changed = false;
+
     if (!isProtectionSourceActive()) {
-        if (settings.store.disableWhenStreamEnds) autoEnabled = false;
-        autoSuppressedForStream = false;
-        applyStreamProof();
+        if (settings.store.disableWhenStreamEnds && autoEnabled) {
+            autoEnabled = false;
+            changed = true;
+        }
+        if (autoSuppressedForStream) {
+            autoSuppressedForStream = false;
+            changed = true;
+        }
+        if (changed || lastAppliedActive === undefined) applyStreamProof();
         return;
     }
 
-    if (settings.store.autoStreamProof && !autoSuppressedForStream) {
+    if (settings.store.autoStreamProof && !autoSuppressedForStream && !autoEnabled) {
         autoEnabled = true;
+        changed = true;
     }
 
-    applyStreamProof();
+    if (changed || lastAppliedActive === undefined) applyStreamProof();
 }
 
 function setManualEnabled(value: boolean) {
@@ -238,6 +266,8 @@ function toggleStreamProof() {
 }
 
 function setAutoEnabledForStream(value: boolean) {
+    const wasActive = isStreamProofActive();
+
     if (value) {
         autoSuppressedForStream = false;
         autoEnabled = settings.store.autoStreamProof;
@@ -246,7 +276,7 @@ function setAutoEnabledForStream(value: boolean) {
         autoSuppressedForStream = false;
     }
 
-    applyStreamProof();
+    if (wasActive !== isStreamProofActive() || lastAppliedActive === undefined) applyStreamProof();
 }
 
 function handleStreamEvent(event: StreamEvent | string, value: boolean) {
@@ -264,6 +294,7 @@ function handleOwnVoiceState(voiceStates: VoiceState[]) {
 }
 
 function updateActiveStyle() {
+    styleDirty = true;
     applyStreamProof();
 }
 
@@ -274,8 +305,8 @@ function handleMessageClick(message: Message, _channel: Channel, event: MouseEve
     else revealedMessageIds.add(message.id);
 
     event.preventDefault();
+    styleDirty = true;
     syncStyle();
-    emitStateChange();
 }
 
 const settings = definePluginSettings({
@@ -548,6 +579,9 @@ export default definePlugin({
         manualEnabled = false;
         autoEnabled = false;
         autoSuppressedForStream = false;
+        lastAppliedActive = false;
+        lastStyleSource = "";
+        styleDirty = true;
         revealedMessageIds.clear();
         disableStyle(style);
         emitStateChange();
