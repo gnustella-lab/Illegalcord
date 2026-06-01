@@ -14,10 +14,10 @@ import { removeFromArray } from "@utils/misc";
 import definePlugin, { OptionType } from "@utils/types";
 import type { Activity, Channel, Guild, GuildMember, Message, OnlineStatus, Role, User } from "@vencord/discord-types";
 import { ActivityType } from "@vencord/discord-types/enums";
-import { ChannelStore, GuildStore, Menu, PresenceStore, SettingsRouter, UserStore, VoiceStateStore } from "@webpack/common";
+import { ChannelStore, GuildStore, Menu, PresenceStore, RelationshipStore, SettingsRouter, UserStore, VoiceStateStore } from "@webpack/common";
 
 import { recordEvent, trimEvents } from "./store";
-import type { MessageSnapshot, SurveillanceEvent, SurveillanceEventType, SurveillanceScope, VoiceState, VoiceStateFlag } from "./types";
+import type { MessageSnapshot, SurveillanceEvent, SurveillanceEventType, SurveillanceScope, VoiceParticipant, VoiceState, VoiceStateFlag } from "./types";
 
 const SETTINGS_ENTRY_KEY = "illegalcord_surveillance";
 const NOTIFICATION_COLOR = "#5865f2";
@@ -95,6 +95,8 @@ interface MessageReactionFluxEvent {
     userId?: string;
     emoji?: ReactionEmoji;
 }
+
+type DisplayUser = User & { globalName?: string | null; };
 
 const voiceStateLabels: Array<[VoiceStateFlag, string, string]> = [
     ["mute", "Server muted", "Server unmuted"],
@@ -256,6 +258,9 @@ const makeId = () =>
 const getUsername = (userId: string, fallback?: string) =>
     fallback ?? UserStore.getUser(userId)?.username ?? userId;
 
+const getDisplayUser = (userId: string) =>
+    UserStore.getUser(userId) as DisplayUser | undefined;
+
 const preview = (content: string) =>
     content.length > MESSAGE_PREVIEW_LIMIT
         ? `${content.slice(0, MESSAGE_PREVIEW_LIMIT)}...`
@@ -312,21 +317,33 @@ const getChannelInfo = (channelId: string | undefined): ChannelInfo => {
     };
 };
 
-const getVoiceUsers = (channelId: string | undefined, userId: string): string => {
-    if (!channelId) return "No one else";
+const getVoiceParticipants = (channelId: string | undefined, userId: string): VoiceParticipant[] => {
+    if (!channelId) return [];
 
-    const users = Object.values(VoiceStateStore.getVoiceStatesForChannel(channelId) ?? {})
+    return Object.values(VoiceStateStore.getVoiceStatesForChannel(channelId) ?? {})
         .filter(state => state.userId !== userId)
         .map(state => {
-            const user = UserStore.getUser(state.userId);
-            return `@${user?.username ?? "Unknown user"} | ${state.userId}`;
-        });
+            const user = getDisplayUser(state.userId);
+            const username = user?.username ?? "Unknown user";
 
-    return users.length ? users.join(", ") : "No one else";
+            return {
+                userId: state.userId,
+                username,
+                displayName: user?.globalName ?? username,
+                isFriend: RelationshipStore.isFriend(state.userId),
+            };
+        });
 };
 
-const withVoiceUsers = (details: string, channelId: string | undefined, userId: string) =>
-    `${details} People in voice: ${getVoiceUsers(channelId, userId)}.`;
+const getVoiceDetails = (details: string, channelId: string | undefined, userId: string) => {
+    const voiceParticipants = getVoiceParticipants(channelId, userId);
+    const people = voiceParticipants.length === 1 ? "1 other person" : `${voiceParticipants.length} other people`;
+
+    return {
+        details: `${details} ${voiceParticipants.length ? `${people} in voice.` : "No one else in voice."}`,
+        voiceParticipants,
+    };
+};
 
 const getGuildInfo = (guildId: string | undefined): Pick<SurveillanceEvent, "guildId" | "guildName"> => {
     const guild = guildId ? GuildStore.getGuild(guildId) : undefined;
@@ -633,21 +650,42 @@ const handleVoiceState = (state: VoiceState) => {
     if (oldChannelId !== channelId) {
         if (!oldChannelId && channelId) {
             const channelInfo = getChannelInfo(channelId);
-            addUserEvent("voice_join", userId, withVoiceUsers(`Joined voice channel ${channelInfo.channelName ?? "Unknown channel"}.`, channelId, userId), channelInfo);
+            const voiceDetails = getVoiceDetails(`Joined voice channel ${channelInfo.channelName ?? "Unknown channel"}.`, channelId, userId);
+
+            addUserEvent("voice_join", userId, voiceDetails.details, {
+                ...channelInfo,
+                voiceParticipants: voiceDetails.voiceParticipants,
+            });
         } else if (oldChannelId && !channelId) {
             const channelInfo = getChannelInfo(oldChannelId);
-            addUserEvent("voice_leave", userId, withVoiceUsers(`Left voice channel ${channelInfo.channelName ?? "Unknown channel"}.`, oldChannelId, userId), channelInfo);
+            const voiceDetails = getVoiceDetails(`Left voice channel ${channelInfo.channelName ?? "Unknown channel"}.`, oldChannelId, userId);
+
+            addUserEvent("voice_leave", userId, voiceDetails.details, {
+                ...channelInfo,
+                voiceParticipants: voiceDetails.voiceParticipants,
+            });
         } else if (oldChannelId && channelId) {
             const oldChannel = getChannelInfo(oldChannelId).channelName ?? "Unknown channel";
             const channelInfo = getChannelInfo(channelId);
-            addUserEvent("voice_move", userId, withVoiceUsers(`Moved from ${oldChannel} to ${channelInfo.channelName ?? "Unknown channel"}.`, channelId, userId), channelInfo);
+            const voiceDetails = getVoiceDetails(`Moved from ${oldChannel} to ${channelInfo.channelName ?? "Unknown channel"}.`, channelId, userId);
+
+            addUserEvent("voice_move", userId, voiceDetails.details, {
+                ...channelInfo,
+                voiceParticipants: voiceDetails.voiceParticipants,
+            });
         }
     }
 
     if (previousState && channelId && oldChannelId === channelId) {
         const changes = getVoiceChanges(previousState, state);
         if (changes.length) {
-            addUserEvent("voice_update", userId, withVoiceUsers(`Voice state changed: ${changes.join(", ")}.`, channelId, userId), getChannelInfo(channelId));
+            const channelInfo = getChannelInfo(channelId);
+            const voiceDetails = getVoiceDetails(`Voice state changed: ${changes.join(", ")}.`, channelId, userId);
+
+            addUserEvent("voice_update", userId, voiceDetails.details, {
+                ...channelInfo,
+                voiceParticipants: voiceDetails.voiceParticipants,
+            });
         }
     }
 

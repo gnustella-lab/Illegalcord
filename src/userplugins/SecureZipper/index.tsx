@@ -157,7 +157,7 @@ function interceptUploadAddFiles(event: unknown): void {
 
 export default definePlugin({
     name: "SecureZipper",
-    description: "Encrypts Discord uploads into 7z archives with AES-256 before sending. (Required 7zip & Windows)",
+    description: "Encrypts Discord uploads into 7z archives with AES-256 before sending. (Required 7zip & Windows",
     authors: [{ name: "irritably", id: 928787166916640838n }],
     tags: ["Privacy", "Utility"],
     reporterTestable: ReporterTestable.None,
