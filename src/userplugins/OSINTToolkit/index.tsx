@@ -4,11 +4,20 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-import { ApplicationCommandInputType, sendBotMessage } from "@api/Commands";
-import { NavContextMenuPatchCallback } from "@api/ContextMenu";
+import { ApplicationCommandInputType, ApplicationCommandOptionType, findOption, sendBotMessage } from "@api/Commands";
+import type { NavContextMenuPatchCallback } from "@api/ContextMenu";
 import { definePluginSettings } from "@api/Settings";
+import ErrorBoundary from "@components/ErrorBoundary";
+import { Margins } from "@components/margins";
+import { Notice } from "@components/Notice";
+import { EquicordDevs } from "@utils/constants";
+import { copyWithToast } from "@utils/discord";
+import { Logger } from "@utils/Logger";
+import { parseUrl } from "@utils/misc";
+import { formatDuration, makeCodeblock } from "@utils/text";
 import definePlugin, { OptionType } from "@utils/types";
-import { Menu } from "@webpack/common";
+import type { CommandArgument, CommandContext, User } from "@vencord/discord-types";
+import { IconUtils, Menu } from "@webpack/common";
 
 interface DomainInfo {
     domain: string;
@@ -16,16 +25,16 @@ interface DomainInfo {
     registrationDate?: string;
     expirationDate?: string;
     updatedAt?: string;
-    status?: string[];
-    nameServers?: string[];
-    dnssec?: string;
+    status: string[];
+    nameServers: string[];
+    dnssec: "Signed" | "Unsigned" | "Unknown";
 }
 
 interface IPInfo {
     ip: string;
     city?: string;
     region?: string;
-    country?: string;
+    countryCode?: string;
     countryName?: string;
     lat?: number;
     lon?: number;
@@ -35,289 +44,428 @@ interface IPInfo {
     zip?: string;
 }
 
+interface MessageContextProps {
+    message?: {
+        author?: User;
+    };
+}
+
+const REQUEST_TIMEOUT_MS = 12_000;
+const logger = new Logger("OSINTToolkit");
+const activeRequests = new Set<AbortController>();
+
 const OSINT_TOOLS = [
-    { id: "see-know", name: "See-Know", url: "https://see-know.eu/", description: "" },
-    { id: "epieos", name: "Epieos", url: "https://epieos.com/", description: "" },
-    { id: "osintx", name: "Osintx_", url: "https://www.osintx.io/", description: "" },
-    { id: "socialeye", name: "SocialEye", url: "https://socialeye.net/", description: "" },
-    { id: "cloudsint", name: "Cloudsint", url: "https://cloudsint.net/", description: "" },
-    { id: "proximity", name: "Proximity OSINT", url: "https://www.proximityosint.com/", description: "" },
-    { id: "deadeye", name: "DeadEye", url: "https://deadeye.cc/", description: "" },
-    { id: "indicia", name: "Indicia", url: "https://indicia.app/", description: "" },
-    { id: "tempemail", name: "Snapmail (Temp-Email)", url: "https://www.snapmail.in/", description: "" }
-];
+    { id: "see-know", name: "See-Know", url: "https://see-know.eu/", description: "Searches public web signals." },
+    { id: "epieos", name: "Epieos", url: "https://epieos.com/", description: "Checks public email and phone traces." },
+    { id: "osintx", name: "Osintx_", url: "https://www.osintx.io/", description: "Collects OSINT links and workflows." },
+    { id: "socialeye", name: "SocialEye", url: "https://socialeye.net/", description: "Searches usernames across public sites." },
+    { id: "cloudsint", name: "Cloudsint", url: "https://cloudsint.net/", description: "Checks cloud storage exposure." },
+    { id: "proximity", name: "Proximity OSINT", url: "https://www.proximityosint.com/", description: "Provides OSINT workflows and resources." },
+    { id: "deadeye", name: "DeadEye", url: "https://deadeye.cc/", description: "Searches public profile signals." },
+    { id: "indicia", name: "Indicia", url: "https://indicia.app/", description: "Enriches public indicators." },
+    { id: "tempemail", name: "Snapmail", url: "https://www.snapmail.in/", description: "Creates temporary email inboxes." }
+] as const;
 
 const OSINT_RESOURCES = [
-    { id: "pikaosint", name: "PikaOSINT", url: "https://pikaosint.pages.dev/", description: "OSINT tools collection" },
-    { id: "osintframework", name: "OSINT Framework", url: "https://osintframework.com/", description: "OSINT framework and tools" },
-    { id: "photo-osint", name: "Photo OSINT", url: "https://start.me/p/0PgzqO/photo-osint", description: "Photo investigation resources" }
-];
+    { id: "pikaosint", name: "PikaOSINT", url: "https://pikaosint.pages.dev/", description: "Curated OSINT tools collection." },
+    { id: "osintframework", name: "OSINT Framework", url: "https://osintframework.com/", description: "Categorized OSINT resource index." },
+    { id: "photo-osint", name: "Photo OSINT", url: "https://start.me/p/0PgzqO/photo-osint", description: "Photo investigation resource board." }
+] as const;
 
 const settings = definePluginSettings({
     enableLogging: {
         type: OptionType.BOOLEAN,
-        description: "Enable debug logging",
+        description: "Log lookup details while debugging.",
         default: false
-    },
-    availableCommands: {
-        type: OptionType.STRING,
-        description:
-            "Available commands:\n" +
-            "/domain <domain> - Lookup a domain via RDAP\n" +
-            "/iplookup <ipv4> - Lookup an IPv4 address\n" +
-            "/myip - Show your public IP information\n" +
-            "/usersearch <username> - Generate a usersearch.org link for a username\n" +
-            "\n" +
-            "Example:\n" +
-            "/domain google.com\n" +
-            "/iplookup 1.1.1.1\n" +
-            "/myip\n" +
-            "/usersearch johndoe\n" +
-            "\n" +
-            "Right-click on any message to access OSINT tools!",
     }
 });
 
-function logDebug(...args: any[]) {
-    if (settings.store.enableLogging) {
-        console.log("[OSINT]", ...args);
+function OSINTToolkitSettingsAbout() {
+    return (
+        <Notice.Warning className={Margins.bottom8}>
+            <p>Commands: /domain, /iplookup, /myip and /usersearch.</p>
+            <p>Right click a message to copy author identifiers, open username searches and browse OSINT resource lists.</p>
+        </Notice.Warning>
+    );
+}
+
+const SafeOSINTToolkitSettingsAbout = ErrorBoundary.wrap(OSINTToolkitSettingsAbout, { noop: true });
+
+function debug(...args: unknown[]) {
+    if (settings.store.enableLogging) logger.debug(...args);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null;
+}
+
+function getString(record: Record<string, unknown>, key: string): string | undefined {
+    const value = record[key];
+    if (typeof value !== "string") return undefined;
+
+    const trimmed = value.trim();
+    return trimmed || undefined;
+}
+
+function getNumber(record: Record<string, unknown>, key: string): number | undefined {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value !== "string") return undefined;
+
+    const number = Number(value);
+    return Number.isFinite(number) ? number : undefined;
+}
+
+function getStringArray(record: Record<string, unknown>, key: string): string[] {
+    const value = record[key];
+    if (!Array.isArray(value)) return [];
+
+    return value.flatMap(item => {
+        if (typeof item !== "string") return [];
+
+        const trimmed = item.trim();
+        return trimmed ? [trimmed] : [];
+    });
+}
+
+function firstString(value: unknown): string | undefined {
+    if (!Array.isArray(value)) return undefined;
+
+    for (const item of value) {
+        if (typeof item === "string" && item.trim()) return item.trim();
     }
 }
 
 function normalizeDomain(input: string): string {
-    return input
+    const trimmed = input.trim();
+    const parsed = parseUrl(/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`);
+    const host = parsed?.hostname ?? trimmed;
+
+    return host
         .toLowerCase()
-        .trim()
-        .replace(/^https?:\/\//, "")
         .replace(/^www\./, "")
-        .replace(/\/.*$/, "")
         .replace(/\.$/, "");
 }
 
-function isValidIPv4(ip: string): boolean {
-    const ipRegex = /^(\d{1,3}\.){3}\d{1,3}$/;
-    if (!ipRegex.test(ip)) return false;
+function isValidDomain(domain: string): boolean {
+    if (domain.length > 253) return false;
 
-    return ip.split(".").every(octet => {
-        const num = Number(octet);
-        return Number.isInteger(num) && num >= 0 && num <= 255;
+    const labels = domain.split(".");
+    if (labels.length < 2) return false;
+
+    return labels.every(label =>
+        label.length >= 1
+        && label.length <= 63
+        && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label)
+    );
+}
+
+function parseIPv4(ip: string): number[] | undefined {
+    const parts = ip.split(".");
+    if (parts.length !== 4) return undefined;
+
+    const octets = parts.map(part => {
+        if (!/^\d{1,3}$/.test(part)) return Number.NaN;
+
+        return Number(part);
     });
+
+    return octets.every(octet => Number.isInteger(octet) && octet >= 0 && octet <= 255)
+        ? octets
+        : undefined;
+}
+
+function isPublicIPv4(ip: string): boolean {
+    const octets = parseIPv4(ip);
+    if (!octets) return false;
+
+    const [first, second, third, fourth] = octets;
+
+    return !(
+        first === 0
+        || first === 10
+        || first === 127
+        || first >= 224
+        || (first === 100 && second >= 64 && second <= 127)
+        || (first === 169 && second === 254)
+        || (first === 172 && second >= 16 && second <= 31)
+        || (first === 192 && second === 168)
+        || (first === 198 && (second === 18 || second === 19))
+        || (first === 255 && second === 255 && third === 255 && fourth === 255)
+    );
 }
 
 function normalizeUsername(input: string): string {
     return input.trim().replace(/^@+/, "");
 }
 
-async function getDomainInfo(domain: string): Promise<DomainInfo | null> {
+async function fetchJson(url: string): Promise<unknown> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    activeRequests.add(controller);
+
     try {
-        const response = await fetch(`https://rdap.org/domain/${encodeURIComponent(domain)}`);
+        const response = await fetch(url, { signal: controller.signal });
 
         if (!response.ok) {
-            throw new Error(`RDAP lookup failed with status ${response.status}`);
+            throw new Error(`Request failed with status ${response.status}`);
         }
 
-        const data = await response.json();
+        return await response.json() as unknown;
+    } finally {
+        clearTimeout(timeout);
+        activeRequests.delete(controller);
+    }
+}
 
-        let registrar = "Unknown";
-        if (Array.isArray(data.entities)) {
-            const registrarEntity = data.entities.find((e: any) =>
-                Array.isArray(e.roles) && e.roles.includes("registrar")
-            );
+function getRegistrar(entities: unknown): string | undefined {
+    if (!Array.isArray(entities)) return undefined;
 
-            if (registrarEntity?.vcardArray?.[1]) {
-                const fn = registrarEntity.vcardArray[1].find((p: any) => p[0] === "fn");
-                if (fn?.[3]) {
-                    registrar = fn[3];
-                }
+    for (const entity of entities) {
+        if (!isRecord(entity) || !Array.isArray(entity.roles) || !entity.roles.includes("registrar")) continue;
+
+        const vcardRows = Array.isArray(entity.vcardArray) ? entity.vcardArray[1] : undefined;
+        if (!Array.isArray(vcardRows)) continue;
+
+        for (const row of vcardRows) {
+            if (Array.isArray(row) && row[0] === "fn" && typeof row[3] === "string" && row[3].trim()) {
+                return row[3].trim();
             }
         }
-
-        const registrationDate =
-            data.events?.find((e: any) => e.eventAction === "registration")?.eventDate ??
-            data.events?.find((e: any) => e.eventAction === "registered")?.eventDate;
-
-        const expirationDate =
-            data.events?.find((e: any) => e.eventAction === "expiration")?.eventDate ??
-            data.events?.find((e: any) => e.eventAction === "expire")?.eventDate;
-
-        const updatedAt =
-            data.events?.find((e: any) => e.eventAction === "last changed")?.eventDate ??
-            data.events?.find((e: any) => e.eventAction === "last update of RDAP database")?.eventDate;
-
-        return {
-            domain: data.ldhName || domain,
-            registrar,
-            registrationDate,
-            expirationDate,
-            updatedAt,
-            status: Array.isArray(data.status) ? data.status : [],
-            nameServers: Array.isArray(data.nameservers)
-                ? data.nameservers.map((ns: any) => ns.ldhName).filter(Boolean)
-                : [],
-            dnssec: data.secureDNS?.delegationSigned ? "signed" : "unsigned"
-        };
-    } catch (error) {
-        console.error("Domain lookup error:", error);
-        return null;
     }
 }
 
-async function getIPInfo(ip: string): Promise<IPInfo | null> {
-    try {
-        const response = await fetch(`https://free.freeipapi.com/api/json/${encodeURIComponent(ip)}`);
+function getEventDate(events: unknown, actions: string[]): string | undefined {
+    if (!Array.isArray(events)) return undefined;
 
-        if (!response.ok) {
-            throw new Error(`IP lookup failed with status ${response.status}`);
-        }
+    for (const event of events) {
+        if (!isRecord(event)) continue;
 
-        const data = await response.json();
-
-        const timezone =
-            Array.isArray(data.timeZones) && data.timeZones.length > 0
-                ? data.timeZones[0]
-                : data.timeZone || data.timezone;
-
-        return {
-            ip: data.ipAddress || data.ip || ip,
-            city: data.cityName || data.city,
-            region: data.regionName || data.region,
-            country: data.countryCode || data.country,
-            countryName: data.countryName || data.country,
-            lat: typeof data.latitude === "number" ? data.latitude : undefined,
-            lon: typeof data.longitude === "number" ? data.longitude : undefined,
-            org: data.organization || data.asnOrganization || data.org,
-            isp: data.isp || data.asnOrganization,
-            timezone,
-            zip: data.zipCode || data.zip
-        };
-    } catch (error) {
-        console.error("IP lookup error:", error);
-        return null;
+        const action = getString(event, "eventAction");
+        if (action && actions.includes(action)) return getString(event, "eventDate");
     }
 }
 
-async function getMyIP(): Promise<IPInfo | null> {
-    try {
-        const response = await fetch("https://free.freeipapi.com/api/json");
+function getNameServers(nameServers: unknown): string[] {
+    if (!Array.isArray(nameServers)) return [];
 
-        if (!response.ok) {
-            throw new Error(`My IP lookup failed with status ${response.status}`);
-        }
+    return nameServers.flatMap(nameServer => {
+        if (!isRecord(nameServer)) return [];
 
-        const data = await response.json();
+        const name = getString(nameServer, "ldhName");
+        return name ? [name] : [];
+    });
+}
 
-        const timezone =
-            Array.isArray(data.timeZones) && data.timeZones.length > 0
-                ? data.timeZones[0]
-                : data.timeZone || data.timezone;
+async function getDomainInfo(domain: string): Promise<DomainInfo | undefined> {
+    const data = await fetchJson(`https://rdap.org/domain/${encodeURIComponent(domain)}`);
+    if (!isRecord(data)) return undefined;
 
-        return {
-            ip: data.ipAddress || data.ip,
-            city: data.cityName || data.city,
-            region: data.regionName || data.region,
-            country: data.countryCode || data.country,
-            countryName: data.countryName || data.country,
-            lat: typeof data.latitude === "number" ? data.latitude : undefined,
-            lon: typeof data.longitude === "number" ? data.longitude : undefined,
-            org: data.organization || data.asnOrganization || data.org,
-            isp: data.isp || data.asnOrganization,
-            timezone,
-            zip: data.zipCode || data.zip
-        };
-    } catch (error) {
-        console.error("My IP lookup error:", error);
-        return null;
-    }
+    const { secureDNS } = data;
+    const dnssec = isRecord(secureDNS)
+        ? secureDNS.delegationSigned === true ? "Signed" : "Unsigned"
+        : "Unknown";
+
+    return {
+        domain: getString(data, "ldhName") ?? domain,
+        registrar: getRegistrar(data.entities),
+        registrationDate: getEventDate(data.events, ["registration", "registered"]),
+        expirationDate: getEventDate(data.events, ["expiration", "expire"]),
+        updatedAt: getEventDate(data.events, ["last changed", "last update of RDAP database"]),
+        status: getStringArray(data, "status"),
+        nameServers: getNameServers(data.nameservers),
+        dnssec
+    };
+}
+
+function getTimezone(data: Record<string, unknown>): string | undefined {
+    return firstString(data.timeZones) ?? getString(data, "timeZone") ?? getString(data, "timezone");
+}
+
+async function getIPInfo(ip?: string): Promise<IPInfo | undefined> {
+    const data = await fetchJson(`https://free.freeipapi.com/api/json${ip ? `/${encodeURIComponent(ip)}` : ""}`);
+    if (!isRecord(data)) return undefined;
+
+    const resolvedIp = getString(data, "ipAddress") ?? getString(data, "ip") ?? ip;
+    if (!resolvedIp) return undefined;
+
+    return {
+        ip: resolvedIp,
+        city: getString(data, "cityName") ?? getString(data, "city"),
+        region: getString(data, "regionName") ?? getString(data, "region"),
+        countryCode: getString(data, "countryCode"),
+        countryName: getString(data, "countryName") ?? getString(data, "country"),
+        lat: getNumber(data, "latitude"),
+        lon: getNumber(data, "longitude"),
+        org: getString(data, "organization") ?? getString(data, "asnOrganization") ?? getString(data, "org"),
+        isp: getString(data, "isp") ?? getString(data, "asnOrganization"),
+        timezone: getTimezone(data),
+        zip: getString(data, "zipCode") ?? getString(data, "zip")
+    };
 }
 
 function calculateDomainAge(registrationDate: string): string {
-    const now = new Date();
-    const regDate = new Date(registrationDate);
+    const timestamp = Date.parse(registrationDate);
+    if (Number.isNaN(timestamp)) return "Unknown";
 
-    if (Number.isNaN(regDate.getTime())) {
-        return "Unknown";
-    }
-
-    const diffTime = Math.abs(now.getTime() - regDate.getTime());
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
-    const years = Math.floor(diffDays / 365);
-    const months = Math.floor((diffDays % 365) / 30);
-    const days = (diffDays % 365) % 30;
-
-    return `${years}y ${months}m ${days}d`;
+    const days = Math.max(0, Math.floor((Date.now() - timestamp) / 86_400_000));
+    return formatDuration(days, "days", true);
 }
 
-function createDomainMessage(info: DomainInfo) {
+function formatDate(value?: string): string {
+    if (!value) return "N/A";
+
+    const timestamp = Date.parse(value);
+    return Number.isNaN(timestamp) ? value : new Date(timestamp).toLocaleString();
+}
+
+function formatLimited(values: string[], limit = 4): string {
+    if (!values.length) return "N/A";
+    if (values.length <= limit) return values.join(", ");
+
+    return `${values.slice(0, limit).join(", ")} and ${values.length - limit} more`;
+}
+
+function createDomainMessage(info: DomainInfo): string {
     const ageText = info.registrationDate ? calculateDomainAge(info.registrationDate) : "Unknown";
 
-    return [
-        "```txt",
+    return makeCodeblock([
         `[DOMAIN LOOKUP] ${info.domain}`,
-        `Registration : ${info.registrationDate || "N/A"}`,
+        `Registration : ${formatDate(info.registrationDate)}`,
         `Age          : ${ageText}`,
-        `Expiration   : ${info.expirationDate || "N/A"}`,
-        `Registrar    : ${info.registrar || "Unknown"}`,
-        `Updated      : ${info.updatedAt || "N/A"}`,
-        `DNSSEC       : ${info.dnssec || "N/A"}`,
-        `Status       : ${info.status?.length ? info.status.join(", ") : "N/A"}`,
-        "```"
-    ].join("\n");
+        `Expiration   : ${formatDate(info.expirationDate)}`,
+        `Registrar    : ${info.registrar ?? "Unknown"}`,
+        `Updated      : ${formatDate(info.updatedAt)}`,
+        `DNSSEC       : ${info.dnssec}`,
+        `Status       : ${formatLimited(info.status)}`,
+        `Name servers : ${formatLimited(info.nameServers)}`
+    ].join("\n"), "txt");
 }
 
-function createIPMessage(info: IPInfo) {
+function createIPMessage(info: IPInfo): string {
     const coordinates =
         typeof info.lat === "number" && typeof info.lon === "number"
             ? `${info.lat}, ${info.lon}`
             : "Unknown";
+    const country = info.countryName
+        ? info.countryCode ? `${info.countryName} (${info.countryCode})` : info.countryName
+        : "Unknown";
 
-    return [
-        "```txt",
+    return makeCodeblock([
         `[IP LOOKUP] ${info.ip}`,
-        `City         : ${info.city || "Unknown"}`,
-        `Region       : ${info.region || "Unknown"}`,
-        `Country      : ${info.countryName || "Unknown"} (${info.country || "?"})`,
-        `Timezone     : ${info.timezone || "Unknown"}`,
-        `ZIP Code     : ${info.zip || "Unknown"}`,
-        `ISP          : ${info.isp || "Unknown"}`,
-        `Organization : ${info.org || "Unknown"}`,
-        `Coordinates  : ${coordinates}`,
-        "```"
-    ].join("\n");
+        `City         : ${info.city ?? "Unknown"}`,
+        `Region       : ${info.region ?? "Unknown"}`,
+        `Country      : ${country}`,
+        `Timezone     : ${info.timezone ?? "Unknown"}`,
+        `ZIP Code     : ${info.zip ?? "Unknown"}`,
+        `ISP          : ${info.isp ?? "Unknown"}`,
+        `Organization : ${info.org ?? "Unknown"}`,
+        `Coordinates  : ${coordinates}`
+    ].join("\n"), "txt");
 }
 
-function openUrl(url: string) {
-    window.open(url, "_blank", "noopener,noreferrer");
+function getUsernameSearchUrls(username: string) {
+    const encoded = encodeURIComponent(username);
+
+    return {
+        userSearch: `https://usersearch.org/results.php?type=standard&URL_username=${encoded}`,
+        whatsMyName: `https://whatsmyname.app/?q=${encoded}`
+    };
 }
 
-const messageContextMenuPatch: NavContextMenuPatchCallback = (children, { message }) => {
-    if (!message || !message.author) return;
+function createUserSearchMessage(username: string): string {
+    const urls = getUsernameSearchUrls(username);
 
-    const osintGroup = children.find((child: any) => child?.props?.id === "osint-tools");
-    if (osintGroup) return;
+    return makeCodeblock([
+        `[USER SEARCH] ${username}`,
+        `UserSearch  : ${urls.userSearch}`,
+        `WhatsMyName : ${urls.whatsMyName}`
+    ].join("\n"), "txt");
+}
+
+function getDiscordUserUrl(user: User): string {
+    return `https://discord.com/users/${encodeURIComponent(user.id)}`;
+}
+
+function getAvatarSearchUrl(avatarUrl: string): string {
+    return `https://lens.google.com/uploadbyurl?url=${encodeURIComponent(avatarUrl)}`;
+}
+
+function openExternal(url: string) {
+    VencordNative.native.openExternal(url);
+}
+
+function abortActiveRequests() {
+    activeRequests.forEach(controller => controller.abort());
+    activeRequests.clear();
+}
+
+const messageContextMenuPatch: NavContextMenuPatchCallback = (children, { message }: MessageContextProps) => {
+    const author = message?.author;
+    if (!author || children.find(child => child?.props?.id === "vc-osint-toolkit-group")) return;
+
+    const username = normalizeUsername(author.username);
+    const urls = getUsernameSearchUrls(username);
+    const avatarUrl = IconUtils.getUserAvatarURL(author, true, 512);
 
     children.push(
-        <Menu.MenuGroup id="osint-tools">
-            <Menu.MenuItem id="osint-toolkit-main" label="OSINT Toolkit">
-                <Menu.MenuItem id="csint-tools" label="CSINT Tools">
+        <Menu.MenuGroup id="vc-osint-toolkit-group">
+            <Menu.MenuItem id="vc-osint-toolkit" label="OSINT Toolkit">
+                <Menu.MenuItem id="vc-osint-author" label="Message Author">
+                    <Menu.MenuItem
+                        id="vc-osint-copy-user-id"
+                        label="Copy User ID"
+                        action={() => void copyWithToast(author.id, "User ID copied.")}
+                    />
+                    <Menu.MenuItem
+                        id="vc-osint-copy-user-url"
+                        label="Copy User URL"
+                        action={() => void copyWithToast(getDiscordUserUrl(author), "User URL copied.")}
+                    />
+                    <Menu.MenuItem
+                        id="vc-osint-open-user-url"
+                        label="Open User URL"
+                        action={() => openExternal(getDiscordUserUrl(author))}
+                    />
+                    <Menu.MenuItem
+                        id="vc-osint-search-usersearch"
+                        label="Search with UserSearch"
+                        action={() => openExternal(urls.userSearch)}
+                    />
+                    <Menu.MenuItem
+                        id="vc-osint-search-whatsmyname"
+                        label="Search with WhatsMyName"
+                        action={() => openExternal(urls.whatsMyName)}
+                    />
+                    {avatarUrl
+                        ? (
+                            <Menu.MenuItem
+                                id="vc-osint-search-avatar"
+                                label="Reverse Search Avatar"
+                                action={() => openExternal(getAvatarSearchUrl(avatarUrl))}
+                            />
+                        )
+                        : null}
+                </Menu.MenuItem>
+                <Menu.MenuItem id="vc-osint-lookup-tools" label="Lookup Tools">
                     {OSINT_TOOLS.map(tool => (
                         <Menu.MenuItem
-                            key={`csint-${tool.id}`}
-                            id={`csint-${tool.id}`}
+                            key={`vc-osint-tool-${tool.id}`}
+                            id={`vc-osint-tool-${tool.id}`}
                             label={tool.name}
                             hint={tool.description}
-                            action={() => openUrl(tool.url)}
+                            action={() => openExternal(tool.url)}
                         />
                     ))}
                 </Menu.MenuItem>
-                <Menu.MenuItem id="osint-tools" label="OSINT Tools">
+                <Menu.MenuItem id="vc-osint-resource-lists" label="Resource Lists">
                     {OSINT_RESOURCES.map(resource => (
                         <Menu.MenuItem
-                            key={`osint-${resource.id}`}
-                            id={`osint-${resource.id}`}
+                            key={`vc-osint-resource-${resource.id}`}
+                            id={`vc-osint-resource-${resource.id}`}
                             label={resource.name}
                             hint={resource.description}
-                            action={() => openUrl(resource.url)}
+                            action={() => openExternal(resource.url)}
                         />
                     ))}
                 </Menu.MenuItem>
@@ -328,180 +476,139 @@ const messageContextMenuPatch: NavContextMenuPatchCallback = (children, { messag
 
 export default definePlugin({
     name: "OSINTToolkit",
-    description: "OSINT - Domain age lookup, IP information, and username search",
-    tags: ["Utility", "Developers"],
-    authors: [{ name: "irritably", id: 928787166916640838n }],
+    description: "Adds OSINT commands and quick lookup links for public domain, IP and username checks.",
+    tags: ["Utility", "Privacy"],
+    authors: [EquicordDevs.irritably],
     settings,
+    settingsAboutComponent: SafeOSINTToolkitSettingsAbout,
 
     contextMenus: {
-        "message": messageContextMenuPatch
+        message: messageContextMenuPatch
     },
 
     commands: [
         {
             name: "domain",
-            description: "Get domain registration information and age",
+            description: "Looks up public RDAP registration information for a domain.",
             inputType: ApplicationCommandInputType.BUILT_IN,
-            predicate: () => true,
             options: [
                 {
                     name: "domain",
-                    description: "The domain to lookup (e.g., google.com)",
-                    type: 3,
+                    description: "Domain to look up, like example.com.",
+                    type: ApplicationCommandOptionType.STRING,
                     required: true
                 }
             ],
-            execute: async (args: any[], ctx: any) => {
-                const channelId = ctx.channel.id;
-                const domainInput = args[0]?.value as string;
+            execute: async (args: CommandArgument[], ctx: CommandContext) => {
+                const domainInput = findOption<string>(args, "domain", "");
+                const domain = normalizeDomain(domainInput);
 
-                if (!domainInput) {
-                    sendBotMessage(channelId, { content: "Please provide a domain name!" });
+                if (!isValidDomain(domain)) {
+                    sendBotMessage(ctx.channel.id, { content: "Invalid domain. Use a root domain like example.com." });
                     return;
                 }
 
-                const domain = normalizeDomain(domainInput);
-                logDebug("Looking up domain:", domain);
+                debug("Looking up domain", domain);
 
                 try {
                     const info = await getDomainInfo(domain);
 
                     if (!info) {
-                        sendBotMessage(channelId, {
-                            content: `Failed to retrieve information for **${domain}**\nPossible reasons:\n• Domain doesn't exist\n• RDAP server unavailable\n• Invalid domain format`
-                        });
+                        sendBotMessage(ctx.channel.id, { content: `Could not retrieve public RDAP information for **${domain}**.` });
                         return;
                     }
 
-                    sendBotMessage(channelId, { content: createDomainMessage(info) });
-                } catch {
-                    sendBotMessage(channelId, {
-                        content: `An unexpected error occurred while looking up **${domain}**`
-                    });
+                    sendBotMessage(ctx.channel.id, { content: createDomainMessage(info) });
+                } catch (error) {
+                    debug("Domain lookup failed", error);
+                    sendBotMessage(ctx.channel.id, { content: `Could not complete the domain lookup for **${domain}**.` });
                 }
             }
         },
         {
             name: "iplookup",
-            description: "Get geolocation and network information for an IP",
+            description: "Looks up public geolocation and network information for an IPv4 address.",
             inputType: ApplicationCommandInputType.BUILT_IN,
-            predicate: () => true,
             options: [
                 {
                     name: "ip",
-                    description: "The IP address to lookup (IPv4)",
-                    type: 3,
+                    description: "Public IPv4 address to look up.",
+                    type: ApplicationCommandOptionType.STRING,
                     required: true
                 }
             ],
-            execute: async (args: any[], ctx: any) => {
-                const channelId = ctx.channel.id;
-                const ipInput = args[0]?.value as string;
+            execute: async (args: CommandArgument[], ctx: CommandContext) => {
+                const ip = findOption<string>(args, "ip", "").trim();
 
-                if (!ipInput) {
-                    sendBotMessage(channelId, { content: "Please provide an IP address!" });
+                if (!isPublicIPv4(ip)) {
+                    sendBotMessage(ctx.channel.id, { content: "Invalid public IPv4 address. Use an address like 8.8.8.8." });
                     return;
                 }
 
-                const ip = ipInput.trim();
-
-                if (!isValidIPv4(ip)) {
-                    sendBotMessage(channelId, {
-                        content: "Invalid IP address format! Please use IPv4 format (e.g., 8.8.8.8)"
-                    });
-                    return;
-                }
-
-                logDebug("Looking up IP:", ip);
+                debug("Looking up IP", ip);
 
                 try {
                     const info = await getIPInfo(ip);
 
                     if (!info) {
-                        sendBotMessage(channelId, {
-                            content: `Failed to retrieve information for **${ip}**\nPossible reasons:\n• Provider unavailable\n• Rate limit exceeded\n• Network error\n• Unsupported IP format`
-                        });
+                        sendBotMessage(ctx.channel.id, { content: `Could not retrieve public IP information for **${ip}**.` });
                         return;
                     }
 
-                    sendBotMessage(channelId, { content: createIPMessage(info) });
-                } catch {
-                    sendBotMessage(channelId, {
-                        content: `An unexpected error occurred while looking up **${ip}**`
-                    });
+                    sendBotMessage(ctx.channel.id, { content: createIPMessage(info) });
+                } catch (error) {
+                    debug("IP lookup failed", error);
+                    sendBotMessage(ctx.channel.id, { content: `Could not complete the IP lookup for **${ip}**.` });
                 }
             }
         },
         {
             name: "myip",
-            description: "Show your public IP address and geolocation",
+            description: "Shows your public IP address and approximate geolocation.",
             inputType: ApplicationCommandInputType.BUILT_IN,
-            predicate: () => true,
-            execute: async (_args: any[], ctx: any) => {
-                const channelId = ctx.channel.id;
-
+            execute: async (_args: CommandArgument[], ctx: CommandContext) => {
                 try {
-                    const info = await getMyIP();
+                    const info = await getIPInfo();
 
                     if (!info) {
-                        sendBotMessage(channelId, {
-                            content: "Failed to retrieve your IP information.\nPossible reasons:\n• Provider unavailable\n• Rate limit exceeded\n• Network error"
-                        });
+                        sendBotMessage(ctx.channel.id, { content: "Could not retrieve your public IP information." });
                         return;
                     }
 
-                    sendBotMessage(channelId, { content: createIPMessage(info) });
-                } catch {
-                    sendBotMessage(channelId, {
-                        content: "An unexpected error occurred while retrieving your IP."
-                    });
+                    sendBotMessage(ctx.channel.id, { content: createIPMessage(info) });
+                } catch (error) {
+                    debug("My IP lookup failed", error);
+                    sendBotMessage(ctx.channel.id, { content: "Could not complete your public IP lookup." });
                 }
             }
         },
         {
             name: "usersearch",
-            description: "Generate a usersearch.org link for a username",
+            description: "Generates public username search links.",
             inputType: ApplicationCommandInputType.BUILT_IN,
-            predicate: () => true,
             options: [
                 {
                     name: "username",
-                    description: "The username to search (e.g., johndoe)",
-                    type: 3,
+                    description: "Username to search.",
+                    type: ApplicationCommandOptionType.STRING,
                     required: true
                 }
             ],
-            execute: async (args: any[], ctx: any) => {
-                const channelId = ctx.channel.id;
-                const usernameInput = args[0]?.value as string;
-
-                if (!usernameInput) {
-                    sendBotMessage(channelId, { content: "Please provide a username!" });
-                    return;
-                }
-
-                const username = normalizeUsername(usernameInput);
+            execute: async (args: CommandArgument[], ctx: CommandContext) => {
+                const username = normalizeUsername(findOption<string>(args, "username", ""));
 
                 if (!username) {
-                    sendBotMessage(channelId, { content: "Invalid username!" });
+                    sendBotMessage(ctx.channel.id, { content: "Invalid username." });
                     return;
                 }
 
-                const searchUrl = `https://usersearch.org/results.php?type=standard&URL_username=${encodeURIComponent(username)}`;
-                const whatsMyNameUrl = `https://whatsmyname.app/?q=${encodeURIComponent(username)}`;
-
-                logDebug("Generating usersearch link for:", username);
-
-                sendBotMessage(channelId, {
-                    content: [
-                        "```txt",
-                        `[USER SEARCH] ${username}`,
-                        `Link UserSearch : ${searchUrl}`,
-                        `Link Whatsmyname : ${whatsMyNameUrl}`,
-                        "```"
-                    ].join("\n")
-                });
+                debug("Generating username search links", username);
+                sendBotMessage(ctx.channel.id, { content: createUserSearchMessage(username) });
             }
         }
-    ]
+    ],
+
+    stop() {
+        abortActiveRequests();
+    }
 });
