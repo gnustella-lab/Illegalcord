@@ -136,6 +136,7 @@ Note: Firefox extension zip requires Firefox for developers
 - [Vendicated](https://github.com/Vendicated) for creating [Vencord](https://github.com/Vendicated/Vencord)
 - [verticalsync](https://github.com/verticalsync) for creating [Suncord](https://github.com/verticalsync/Suncord)
 - [clrxxo ](https://github.com/clrxxo) for creating [Kamidere](https://github.com/clrxxo/Kamidere)
+- [Nightcord](https://nightcord.ru/) For the ideas and the foundation of some plugins.
 
 ## Disclaimer
 
