@@ -58,6 +58,7 @@ I plugin inclusi possono essere trovati [qui](https://equicord.org/plugins).
 - **OsintToolKit**
 - **Ottimizzazioni di Hisako**
 - **SilentDelete**
+- **LarpCord**
 - **ScreenshareAlert**
 - **BoosterCount** (https://github.com/Reathe/BoosterCount/tree/main)
 - **BadgeSelector** | (https://github.com/002-sans/VencordPlugins/tree/b8c7c98a50c0700f7389b0484e5659fe5ec0f99e/BadgesSelector)
@@ -135,6 +136,7 @@ Nota: Il file zip dell'estensione Firefox richiede Firefox per sviluppatori
 - [thororen1234](https://github.com/thororen1234) per aver creato [Equicord](https://github.com/Equicord)
 - [Vendicated](https://github.com/Vendicated) per aver creato [Vencord](https://github.com/Vendicated/Vencord)
 - [verticalsync](https://github.com/verticalsync) per aver creato [Suncord](https://github.com/verticalsync/Suncord)
+- [Nightcord](https://nightcord.ru/) Per l'idee & la Base di alcuni plugins.
 
 ## Dichiarazione di Non Responsabilità
 
