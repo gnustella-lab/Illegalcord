@@ -143,7 +143,7 @@ export default definePlugin({
     name: "AutoModBypass",
     description: "Transforms your messages into various text styles (Fraktur, Zalgo, Squared, etc.) for automod bypass & Fun",
     authors: [{ name: "irritably", id: 928787166916640838n }],
-    tags: ["Chat", "Fun", "Utils"],
+    tags: ["Chat", "Fun", "Utility"],
     enabledByDefault: false,
     settings,
 
