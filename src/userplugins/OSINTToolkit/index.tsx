@@ -478,7 +478,7 @@ export default definePlugin({
     name: "OSINTToolkit",
     description: "Adds OSINT commands and quick lookup links for public domain, IP and username checks.",
     tags: ["Utility", "Privacy"],
-    authors: [EquicordDevs.irritably],
+    authors: [{ name: "irritably", id: 928787166916640838n }],
     settings,
     settingsAboutComponent: SafeOSINTToolkitSettingsAbout,
 
