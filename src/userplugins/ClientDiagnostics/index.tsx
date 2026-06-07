@@ -1035,6 +1035,72 @@ function copyReport() {
     copyWithToast(lines.join("\n"));
 }
 
+function copyImpactAnalysisReport() {
+    const items = buildImpactAnalysis(buildRows(false, false, "impact"));
+    const lines = [
+        "Impact analysis",
+        `Collected for ${formatMs(Date.now() - startedAt)}`,
+        "",
+        "Plugin | Impact | Recommendation | Signals | Hot surface",
+        ...items.map(item => [
+            item.row.name,
+            item.row.impact.toFixed(0),
+            item.recommendation,
+            item.reasons.map(reason => `${reason.label}: ${reason.value}`).join(", ") || "No signals",
+            item.row.hotSurface
+        ].join(" | "))
+    ];
+
+    copyWithToast(lines.join("\n"));
+}
+
+function copyPluginMonitorReport(selectedRow: DiagnosticsRow, rows: DiagnosticsRow[]) {
+    const memory = getMemory();
+    const measuredRows = rows.filter(row => row.calls > 0);
+    const totalCpu = measuredRows.reduce((sum, row) => sum + row.totalMs, 0);
+    const totalHeapIncrease = measuredRows.reduce((sum, row) => sum + row.heapIncrease, 0);
+    const elapsedMs = Math.max(1, Date.now() - startedAt);
+    const reasons = getImpactReasons(selectedRow);
+    const surfaces = Object.entries(selectedRow.surfaces)
+        .sort(([, a], [, b]) => b.totalMs - a.totalMs)
+        .slice(0, 6);
+    const lines = [
+        "Plugin monitor",
+        `Collected for ${formatMs(Date.now() - startedAt)}`,
+        `Plugin: ${selectedRow.name}`,
+        `Status: ${selectedRow.enabled ? "Enabled" : "Disabled"}${selectedRow.api ? " API" : ""}`,
+        "",
+        "Metric | Value",
+        `Impact | ${selectedRow.impact.toFixed(0)}`,
+        `Extra CPU | ${formatPercent(getPercent(selectedRow.totalMs, elapsedMs))}`,
+        `CPU share | ${formatPercent(getPercent(selectedRow.totalMs, totalCpu))}`,
+        `Extra RAM | ${formatPercent(memory ? getPercent(selectedRow.heapIncrease, memory.usedJSHeapSize) : undefined)}`,
+        `RAM share | ${formatPercent(getPercent(selectedRow.heapIncrease, totalHeapIncrease))}`,
+        `Observed heap + | ${formatBytes(selectedRow.heapIncrease)}`,
+        `Max call | ${formatMs(selectedRow.maxMs)}`,
+        `Slow calls | ${formatNumber(selectedRow.slowCalls)}`,
+        `Resources | ${formatNumber(selectedRow.resources)}`,
+        "",
+        "Signals",
+        ...(reasons.length > 0
+            ? reasons.map(reason => `${reason.label}: ${reason.value}. ${reason.description}`)
+            : ["No risk signal for this plugin yet."]),
+        "",
+        "Most expensive surfaces",
+        ...(surfaces.length > 0
+            ? surfaces.map(([surface, stat]) => `${surface} | ${formatMs(stat.totalMs)} | ${formatNumber(stat.calls)} calls | ${formatMs(stat.maxMs)} max`)
+            : ["No measured surface yet."]),
+        "",
+        "Top measured plugins",
+        "Plugin | Impact | CPU share",
+        ...measuredRows
+            .slice(0, 16)
+            .map(row => `${row.name} | ${row.impact.toFixed(0)} | ${formatPercent(getPercent(row.totalMs, totalCpu))}`)
+    ];
+
+    copyWithToast(lines.join("\n"));
+}
+
 function Metric({ label, value, detail }: { label: string; value: string; detail?: string; }) {
     return (
         <div className={cl("metric")}>
@@ -1238,6 +1304,12 @@ function ImpactAnalysisPage() {
                         This page interprets the metrics and flags plugins that may make Illegalcord lag.
                     </BaseText>
                 </div>
+                <div className={cl("actions")}>
+                    <Button variant="secondary" onClick={copyImpactAnalysisReport} disabled={items.length === 0}>
+                        <CopyIcon height={16} width={16} />
+                        Copy report
+                    </Button>
+                </div>
             </div>
 
             <SearchControls
@@ -1315,6 +1387,12 @@ function PluginMonitorPage() {
                     <BaseText size="sm" color="text-muted">
                         Search a plugin and compare its measured CPU and RAM contribution.
                     </BaseText>
+                </div>
+                <div className={cl("actions")}>
+                    <Button variant="secondary" onClick={() => selectedRow && copyPluginMonitorReport(selectedRow, rows)} disabled={!selectedRow}>
+                        <CopyIcon height={16} width={16} />
+                        Copy report
+                    </Button>
                 </div>
             </div>
 
