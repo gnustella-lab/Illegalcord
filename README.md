@@ -37,6 +37,7 @@ Our included plugins can be found [here](https://equicord.org/plugins).
 - **FastGifPicker**
 - **MassMention**
 - **WebRTCLeakPrevent**
+- **Client Diagnostics**
 - **AutoModBypass**
 - **Securecord** | (AES 256 on messages)
 - **Securecord Opossum Blazing Edition** | BlazingOpossum, block size + IV + MAC Tag 128 bits, key 256 bits. Based on AVX2 instructions, highly-performant, post-quantum symmetric cryptographic algorithm. Advanced, and modern.  | https://github.com/ZygoteCode/BlazingOpossum)
