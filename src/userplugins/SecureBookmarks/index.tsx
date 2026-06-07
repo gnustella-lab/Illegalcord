@@ -54,7 +54,7 @@ export default definePlugin({
     name: "SecureBookmarks",
     description: "Saves encrypted message bookmarks from the message context menu.",
     tags: ["Chat", "Privacy", "Utility"],
-    authors: [EquicordDevs.irritably],
+    authors: [{ name: "irritably", id: 928787166916640838n }],
     dependencies: ["EquicordToolbox"],
     reporterTestable: ReporterTestable.None,
     settings,
