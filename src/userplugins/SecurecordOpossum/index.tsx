@@ -29,6 +29,10 @@ interface DecryptCommandContext extends CommandContext {
 const logger = new Logger("SecurecordOpossum");
 const ENCRYPTED_PREFIX = "🔒ENCRYPTED:";
 const ENCRYPTED_SUFFIX = ":ENDLOCK";
+const ENCRYPTED_PREFIX_FIRST_CODE = ENCRYPTED_PREFIX.charCodeAt(0);
+const ENCRYPTED_SUFFIX_LAST_CODE = ENCRYPTED_SUFFIX.charCodeAt(ENCRYPTED_SUFFIX.length - 1);
+const MIN_ENCRYPTED_MESSAGE_LENGTH = ENCRYPTED_PREFIX.length + ENCRYPTED_SUFFIX.length + 1;
+const CHAT_BAR_SETTING_KEYS = ["pluginActivated", "encryptionEnabled"] satisfies Array<"pluginActivated" | "encryptionEnabled">;
 const SECURITY_CONSTANTS = {
     DEFAULT_MIN_PASSWORD_LENGTH: 12,
     MAX_PASSWORD_LENGTH: 128,
@@ -409,7 +413,11 @@ function resetSecurityState(): void {
 }
 
 function isEncryptedMessage(content: string) {
-    return content.startsWith(ENCRYPTED_PREFIX) && content.endsWith(ENCRYPTED_SUFFIX);
+    return content.length >= MIN_ENCRYPTED_MESSAGE_LENGTH
+        && content.charCodeAt(0) === ENCRYPTED_PREFIX_FIRST_CODE
+        && content.charCodeAt(content.length - 1) === ENCRYPTED_SUFFIX_LAST_CODE
+        && content.startsWith(ENCRYPTED_PREFIX)
+        && content.endsWith(ENCRYPTED_SUFFIX);
 }
 
 function getEncryptedPart(content: string) {
@@ -518,9 +526,9 @@ const EncryptionDisabledIcon: IconComponent = ({ height = 20, width = 20, classN
 
 // Chatbar button
 const EncryptionToggleButton: ChatBarButtonFactory = ({ channel, type }) => {
-    const { pluginActivated, encryptionEnabled } = settings.use();
+    const { pluginActivated, encryptionEnabled } = settings.use(CHAT_BAR_SETTING_KEYS);
 
-    const validChat = ["normal", "sidebar"].some(x => type.analyticsName === x);
+    const validChat = type.analyticsName === "normal" || type.analyticsName === "sidebar";
 
     if (!validChat) return null;
 
@@ -793,17 +801,20 @@ export default definePlugin({
     },
 
     flux: {
-        async MESSAGE_CREATE({ optimistic, type, message, channelId }: IMessageCreate) {
-            if (optimistic || type !== "MESSAGE_CREATE") return;
-            if (message.state === "SENDING") return;
-            if (!settings.store.pluginActivated || !settings.store.autoDecrypt) return;
-            if (!message.content || !isEncryptedMessage(message.content)) return;
+        MESSAGE_CREATE({ optimistic, type, message, channelId }: IMessageCreate) {
+            if (optimistic || type !== "MESSAGE_CREATE" || message.state === "SENDING") return;
+
+            const { content } = message;
+            if (!content || !isEncryptedMessage(content)) return;
+
+            const { store } = settings;
+            if (!store.pluginActivated || !store.autoDecrypt) return;
 
             logInfo("Received encrypted message from", message.author.username);
 
             if (isRateLimited()) {
                 const remainingTime = Math.ceil((lockoutEndTime - Date.now()) / SECURITY_CONSTANTS.MILLISECONDS_PER_MINUTE);
-                if (settings.store.showDecryptErrors) {
+                if (store.showDecryptErrors) {
                     sendBotMessage(channelId, {
                         content: `🔒 Too many failed decryption attempts. Try again in ${remainingTime} minutes.`
                     });
@@ -812,7 +823,7 @@ export default definePlugin({
             }
 
             // Get password from settings
-            const password = settings.store.encryptionPassword;
+            const { encryptionPassword: password } = store;
 
             if (!password) {
                 logInfo("No password set.");
@@ -821,7 +832,7 @@ export default definePlugin({
 
             try {
                 // Extract encrypted message (removing extra characters)
-                const encryptedPart = getEncryptedPart(message.content);
+                const encryptedPart = getEncryptedPart(content);
 
                 // Decode message using BlazingOpossum cipher
                 const decryptedMessage = decryptOpossum(encryptedPart, password);
@@ -839,9 +850,9 @@ export default definePlugin({
                 logError("Decryption error:", errorMessage);
 
                 // Show error message
-                if (settings.store.showDecryptErrors) {
+                if (store.showDecryptErrors) {
                     sendBotMessage(channelId, {
-                        content: settings.store.showDetailedDecryptErrors
+                        content: store.showDetailedDecryptErrors
                             ? `🔒 Decryption failed for message from ${message.author.username}. ${errorMessage}`
                             : `🔒 Decryption failed for message from ${message.author.username}. Check password or try again later.`
                     });
