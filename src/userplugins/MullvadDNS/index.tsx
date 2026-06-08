@@ -13,27 +13,31 @@ import type { DnsFamily, MullvadResolveResult, ResolveProtocol } from "./native"
 
 const Native = VencordNative.pluginHelpers.MullvadDNS as PluginNative<typeof import("./native")>;
 
-enum MullvadProfile {
-    DNS = "dns",
-    ADBLOCK = "adblock",
-    BASE = "base",
-    EXTENDED = "extended",
-    FAMILY = "family",
-    ALL = "all"
-}
+const MullvadProfile = {
+    DNS: "dns",
+    ADBLOCK: "adblock",
+    BASE: "base",
+    EXTENDED: "extended",
+    FAMILY: "family",
+    ALL: "all"
+} as const;
 
-enum LogLevel {
-    VERBOSE = "verbose",
-    INFO = "info",
-    WARN = "warn",
-    ERROR = "error"
-}
+type MullvadProfile = typeof MullvadProfile[keyof typeof MullvadProfile];
 
-enum MullvadResolveMode {
-    AUTOMATIC = "automatic",
-    DOH = "doh",
-    PLAIN_DNS = "plain_dns"
-}
+const LogLevel = {
+    VERBOSE: "verbose",
+    INFO: "info",
+    WARN: "warn",
+    ERROR: "error"
+} as const;
+
+type LogLevel = typeof LogLevel[keyof typeof LogLevel];
+
+const MullvadResolveMode = {
+    AUTOMATIC: "automatic",
+    DOH: "doh",
+    PLAIN_DNS: "plain_dns"
+} as const;
 
 const logger = new Logger("MullvadDNS", "#a6da95");
 
@@ -190,7 +194,7 @@ const settings = definePluginSettings({
     },
     rewriteFetch: {
         type: OptionType.BOOLEAN,
-        description: "Rewrite fetch URLs to resolved IPs. This is experimental and can break HTTPS.",
+        description: "Debug option. Rewrite eligible HTTP fetch URLs to resolved IPs. HTTPS requests stay untouched because IP rewrites break TLS.",
         default: false,
         restartNeeded: true
     },
@@ -358,9 +362,13 @@ function rewriteUrl(url: URL, address: string) {
     return rewrittenUrl.toString();
 }
 
+function canRewriteURL(url: URL) {
+    return url.protocol === "http:";
+}
+
 export default definePlugin({
     name: "MullvadDNS",
-    description: "Resolve Discord hosts through Mullvad DNS over HTTPS.",
+    description: "Resolve Discord hosts through Mullvad DNS.",
     tags: ["Privacy", "Utility"],
     authors: [{ name: "irritably", id: 928787166916640838n }],
     settings,
@@ -372,6 +380,8 @@ export default definePlugin({
         const originalFetch = window.fetch;
         let fetchPatched: typeof window.fetch | null = null;
         let isActive = false;
+        let isStarting = false;
+        let lifecycleToken = 0;
         let startTimer: number | undefined;
         const dnsCache = new Map<string, CacheEntry>();
         const statistics: DnsStatistics = {
@@ -381,6 +391,10 @@ export default definePlugin({
             cacheHits: 0,
             nativeCalls: 0
         };
+
+        function isCurrentLifecycle(token: number) {
+            return token === lifecycleToken;
+        }
 
         function cacheResult(cacheKey: string, result: MullvadResolveResult) {
             dnsCache.set(cacheKey, {
@@ -392,7 +406,9 @@ export default definePlugin({
             });
         }
 
-        async function resolveHostname(hostname: string): Promise<CacheEntry | null> {
+        async function resolveHostname(hostname: string, shouldWarn = true, token?: number): Promise<CacheEntry | null> {
+            if (token != null && !isCurrentLifecycle(token)) return null;
+
             const cacheKey = getCacheKey(hostname);
             const cached = dnsCache.get(cacheKey);
 
@@ -411,6 +427,7 @@ export default definePlugin({
 
             statistics.nativeCalls++;
             const result = await Native.resolveDNS(hostname, getEndpoint(), getLookupFamily(), getTimeoutMs(), getResolverMode(), getPlainDnsServer());
+            if (token != null && !isCurrentLifecycle(token)) return null;
 
             if (result.success && result.addresses.length) {
                 cacheResult(cacheKey, result);
@@ -421,6 +438,7 @@ export default definePlugin({
             if (settings.store.preferIPv6) {
                 statistics.nativeCalls++;
                 const fallback = await Native.resolveDNS(hostname, getEndpoint(), 4, getTimeoutMs(), getResolverMode(), getPlainDnsServer(4));
+                if (token != null && !isCurrentLifecycle(token)) return null;
 
                 if (fallback.success && fallback.addresses.length) {
                     cacheResult(cacheKey, fallback);
@@ -428,17 +446,30 @@ export default definePlugin({
                     return dnsCache.get(cacheKey) ?? null;
                 }
 
-                log.warn(`DNS lookup failed for ${hostname}: ${fallback.error ?? result.error ?? "No addresses returned."}`);
+                if (shouldWarn) {
+                    log.warn(`DNS lookup failed for ${hostname}: ${fallback.error ?? result.error ?? "No addresses returned."}`);
+                } else {
+                    log.verbose(`Skipped preload for ${hostname}: ${fallback.error ?? result.error ?? "No addresses returned."}`);
+                }
+
                 return null;
             }
 
-            log.warn(`DNS lookup failed for ${hostname}: ${result.error ?? "No addresses returned."}`);
+            if (shouldWarn) {
+                log.warn(`DNS lookup failed for ${hostname}: ${result.error ?? "No addresses returned."}`);
+            } else {
+                log.verbose(`Skipped preload for ${hostname}: ${result.error ?? "No addresses returned."}`);
+            }
+
             return null;
         }
 
-        async function preloadRecords() {
-            await Promise.all(getTrackedDomains().map(domain => resolveHostname(domain)));
+        async function preloadRecords(token: number) {
+            await Promise.all(getTrackedDomains().map(domain => resolveHostname(domain, false, token)));
+            if (!isCurrentLifecycle(token)) return false;
+
             log.info(`Preloaded ${dnsCache.size} DNS cache entries.`);
+            return true;
         }
 
         function patchFetch() {
@@ -447,11 +478,11 @@ export default definePlugin({
             const patchedFetch: typeof window.fetch = async (input, init) => {
                 try {
                     const urlText = input instanceof Request ? input.url : String(input);
-                    const url = new URL(urlText);
+                    const url = new URL(urlText, window.location.href);
 
                     statistics.totalRequests++;
 
-                    if (!hostnameMatches(url.hostname) || shouldExcludeURL(url)) {
+                    if (!canRewriteURL(url) || !hostnameMatches(url.hostname) || shouldExcludeURL(url)) {
                         log.verbose(`Skipped ${url.hostname}${url.pathname}.`);
                         return originalFetch.call(window, input, init);
                     }
@@ -490,7 +521,7 @@ export default definePlugin({
             isActive: () => isActive,
 
             async start() {
-                if (isActive) {
+                if (isActive || isStarting) {
                     log.warn("Plugin is already active.");
                     return;
                 }
@@ -501,35 +532,55 @@ export default definePlugin({
                     return;
                 }
 
-                log.info(`Starting ${PLUGIN_NAME} ${VERSION} with ${getEndpoint()}.`);
-                log.info(`Resolver mode: ${getResolverMode()}.`);
+                const token = ++lifecycleToken;
+                isStarting = true;
 
-                if (settings.store.preloadOnStart) {
-                    await preloadRecords();
-                }
+                try {
+                    log.info(`Starting ${PLUGIN_NAME} ${VERSION} with ${getEndpoint()}.`);
+                    log.info(`Resolver mode: ${getResolverMode()}.`);
 
-                if (settings.store.rewriteFetch) {
-                    log.warn("Fetch URL rewriting is experimental and can break HTTPS requests.");
-
-                    if (!patchFetch()) {
-                        showPluginToast("Fetch patch failed.", Toasts.Type.FAILURE);
-                        return;
+                    if (settings.store.preloadOnStart) {
+                        const didPreload = await preloadRecords(token);
+                        if (!didPreload) return;
                     }
-                } else {
-                    log.info("Fetch rewrite is disabled. DNS results are available through the debug API.");
-                }
 
-                isActive = true;
-                showPluginToast(`${PLUGIN_NAME} activated.`, Toasts.Type.SUCCESS);
+                    if (!isCurrentLifecycle(token)) return;
+
+                    if (settings.store.rewriteFetch) {
+                        log.warn("Fetch URL rewriting is a debug option and only applies to HTTP requests. HTTPS requests are left untouched.");
+
+                        if (!patchFetch()) {
+                            showPluginToast("Fetch patch failed.", Toasts.Type.FAILURE);
+                            return;
+                        }
+                    } else {
+                        log.info("Fetch rewrite is disabled. DNS results are available through the debug API.");
+                    }
+
+                    isActive = true;
+                    showPluginToast(`${PLUGIN_NAME} activated.`, Toasts.Type.SUCCESS);
+                } catch (error) {
+                    log.error(`Startup failed: ${getErrorMessage(error)}`);
+                    showPluginToast("Startup failed.", Toasts.Type.FAILURE);
+                } finally {
+                    if (isCurrentLifecycle(token)) {
+                        isStarting = false;
+                    }
+                }
             },
 
             stop() {
+                const wasRunning = isActive || isStarting || fetchPatched !== null;
+
+                lifecycleToken++;
+                isStarting = false;
+
                 if (startTimer != null) {
                     window.clearTimeout(startTimer);
                     startTimer = undefined;
                 }
 
-                if (!isActive) {
+                if (!wasRunning) {
                     log.warn("Plugin is not active.");
                     return;
                 }

@@ -27,6 +27,39 @@ const DNS_TYPE_AAAA = 28;
 const DNS_FLAGS_RECURSION_DESIRED = 0x0100;
 const DNS_POINTER_MASK = 0xc0;
 const DNS_RESPONSE_CODE_MASK = 0x000f;
+const MIN_TIMEOUT_MS = 1000;
+const MAX_TIMEOUT_MS = 15000;
+const MAX_HOSTNAME_LENGTH = 253;
+const MAX_LABEL_LENGTH = 63;
+const MAX_PRELOAD_HOSTNAMES = 50;
+
+const MULLVAD_ENDPOINTS = new Set([
+    "https://dns.mullvad.net/dns-query",
+    "https://adblock.dns.mullvad.net/dns-query",
+    "https://base.dns.mullvad.net/dns-query",
+    "https://extended.dns.mullvad.net/dns-query",
+    "https://family.dns.mullvad.net/dns-query",
+    "https://all.dns.mullvad.net/dns-query"
+]);
+
+const MULLVAD_DNS_SERVERS: Record<DnsFamily, Set<string>> = {
+    4: new Set([
+        "194.242.2.2",
+        "194.242.2.3",
+        "194.242.2.4",
+        "194.242.2.5",
+        "194.242.2.6",
+        "194.242.2.9"
+    ]),
+    6: new Set([
+        "2a07:e340::2",
+        "2a07:e340::3",
+        "2a07:e340::4",
+        "2a07:e340::5",
+        "2a07:e340::6",
+        "2a07:e340::9"
+    ])
+};
 
 const resolverCache = new Map<string, Resolver>();
 
@@ -34,6 +67,89 @@ function getErrorMessage(error: unknown) {
     if (!(error instanceof Error)) return String(error);
     if (error.cause instanceof Error) return `${error.message}: ${error.cause.message}`;
     return error.message;
+}
+
+function getFallbackString(value: unknown) {
+    return typeof value === "string" ? value : "";
+}
+
+function getFallbackFamily(value: unknown): DnsFamily {
+    return value === 6 ? 6 : 4;
+}
+
+function getFallbackProtocol(value: unknown): Exclude<ResolveProtocol, "automatic"> {
+    return value === "plain_dns" ? "plain_dns" : "doh";
+}
+
+function createFailure(hostname: string, endpoint: string, family: DnsFamily, protocol: Exclude<ResolveProtocol, "automatic">, error: string): MullvadResolveResult {
+    return {
+        success: false,
+        hostname,
+        endpoint,
+        family,
+        addresses: [],
+        protocol,
+        error
+    };
+}
+
+function isDnsFamily(value: unknown): value is DnsFamily {
+    return value === 4 || value === 6;
+}
+
+function isResolveProtocol(value: unknown): value is ResolveProtocol {
+    return value === "automatic" || value === "doh" || value === "plain_dns";
+}
+
+function normalizeHostname(value: unknown) {
+    if (typeof value !== "string") return null;
+
+    const hostname = value.trim().toLowerCase().replace(/\.$/, "");
+    if (!hostname || hostname.length > MAX_HOSTNAME_LENGTH) return null;
+
+    const labels = hostname.split(".");
+    if (labels.some(label =>
+        !label ||
+        label.length > MAX_LABEL_LENGTH ||
+        label.startsWith("-") ||
+        label.endsWith("-") ||
+        !/^[a-z0-9-]+$/i.test(label)
+    )) return null;
+
+    return hostname;
+}
+
+function normalizeEndpoint(value: unknown) {
+    if (typeof value !== "string") return null;
+
+    try {
+        const endpoint = new URL(value).toString();
+        return MULLVAD_ENDPOINTS.has(endpoint) ? endpoint : null;
+    } catch {
+        return null;
+    }
+}
+
+function normalizeTimeoutMs(value: unknown) {
+    if (typeof value !== "number" || !Number.isFinite(value)) return null;
+
+    const timeoutMs = Math.trunc(value);
+    if (timeoutMs < MIN_TIMEOUT_MS || timeoutMs > MAX_TIMEOUT_MS) return null;
+
+    return timeoutMs;
+}
+
+function normalizePlainDnsServer(value: unknown, family: DnsFamily) {
+    if (typeof value !== "string") return null;
+
+    const server = value.trim();
+    if (!server) return "";
+
+    return MULLVAD_DNS_SERVERS[family].has(server) ? server : null;
+}
+
+function createTransactionId() {
+    return Math.floor(Math.random() * 0x10000);
 }
 
 function pushUint16(bytes: number[], value: number) {
@@ -44,10 +160,10 @@ function getQueryType(family: DnsFamily) {
     return family === 6 ? DNS_TYPE_AAAA : DNS_TYPE_A;
 }
 
-function encodeDnsQuery(hostname: string, family: DnsFamily) {
+function encodeDnsQuery(hostname: string, family: DnsFamily, transactionId: number) {
     const bytes: number[] = [];
 
-    pushUint16(bytes, 0);
+    pushUint16(bytes, transactionId);
     pushUint16(bytes, DNS_FLAGS_RECURSION_DESIRED);
     pushUint16(bytes, 1);
     pushUint16(bytes, 0);
@@ -105,13 +221,18 @@ function formatIPv6(message: Uint8Array, offset: number) {
     return groups.join(":");
 }
 
-function parseDnsResponse(message: Uint8Array, family: DnsFamily) {
+function parseDnsResponse(message: Uint8Array, family: DnsFamily, transactionId: number) {
     if (message.length < DNS_HEADER_LENGTH) {
         throw new Error("DNS response was too short.");
     }
 
     const view = new DataView(message.buffer, message.byteOffset, message.byteLength);
+    const responseId = readUint16(view, 0);
     const responseCode = readUint16(view, 2) & DNS_RESPONSE_CODE_MASK;
+
+    if (responseId !== transactionId) {
+        throw new Error("DNS response ID did not match.");
+    }
 
     if (responseCode !== 0) {
         throw new Error(`DNS returned response code ${responseCode}.`);
@@ -205,6 +326,7 @@ function resolvePlainDns(hostname: string, server: string, family: DnsFamily) {
 
 async function resolveDoh(hostname: string, endpoint: string, family: DnsFamily, timeoutMs: number): Promise<MullvadResolveResult> {
     const controller = new AbortController();
+    const transactionId = createTransactionId();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
@@ -214,7 +336,7 @@ async function resolveDoh(hostname: string, endpoint: string, family: DnsFamily,
                 Accept: "application/dns-message",
                 "Content-Type": "application/dns-message"
             },
-            body: encodeDnsQuery(hostname, family),
+            body: encodeDnsQuery(hostname, family, transactionId),
             signal: controller.signal
         });
 
@@ -222,7 +344,7 @@ async function resolveDoh(hostname: string, endpoint: string, family: DnsFamily,
             throw new Error(`Mullvad DNS returned ${response.status}.`);
         }
 
-        const addresses = parseDnsResponse(new Uint8Array(await response.arrayBuffer()), family);
+        const addresses = parseDnsResponse(new Uint8Array(await response.arrayBuffer()), family, transactionId);
 
         return {
             success: addresses.length > 0,
@@ -283,20 +405,46 @@ export async function resolveDNS(
     protocol: ResolveProtocol = "automatic",
     plainDnsServer = ""
 ) {
-    if (protocol === "plain_dns") {
-        return resolvePlain(hostname, endpoint, plainDnsServer, family, timeoutMs);
-    }
-
-    const dohResult = await resolveDoh(hostname, endpoint, family, timeoutMs);
-    if (dohResult.success || protocol === "doh" || !plainDnsServer) return dohResult;
-
-    const plainResult = await resolvePlain(hostname, endpoint, plainDnsServer, family, timeoutMs);
-    if (plainResult.success) return plainResult;
-
-    return {
-        ...plainResult,
-        error: `${dohResult.error ?? "DoH failed."} Plain DNS fallback failed: ${plainResult.error ?? "No addresses returned."}`
+    const fallback = {
+        hostname: getFallbackString(hostname),
+        endpoint: getFallbackString(endpoint),
+        family: getFallbackFamily(family),
+        protocol: getFallbackProtocol(protocol)
     };
+    const normalizedHostname = normalizeHostname(hostname);
+    if (!normalizedHostname) return createFailure(fallback.hostname, fallback.endpoint, fallback.family, fallback.protocol, "Invalid hostname.");
+
+    const normalizedEndpoint = normalizeEndpoint(endpoint);
+    if (!normalizedEndpoint) return createFailure(normalizedHostname, fallback.endpoint, fallback.family, fallback.protocol, "Invalid Mullvad DNS endpoint.");
+
+    if (!isDnsFamily(family)) return createFailure(normalizedHostname, normalizedEndpoint, fallback.family, fallback.protocol, "Invalid DNS family.");
+    if (!isResolveProtocol(protocol)) return createFailure(normalizedHostname, normalizedEndpoint, family, fallback.protocol, "Invalid DNS protocol.");
+
+    const normalizedTimeoutMs = normalizeTimeoutMs(timeoutMs);
+    if (normalizedTimeoutMs == null) return createFailure(normalizedHostname, normalizedEndpoint, family, getFallbackProtocol(protocol), "Invalid DNS timeout.");
+
+    const normalizedPlainDnsServer = normalizePlainDnsServer(plainDnsServer, family);
+    if (normalizedPlainDnsServer == null) return createFailure(normalizedHostname, normalizedEndpoint, family, getFallbackProtocol(protocol), "Invalid Mullvad DNS server.");
+    if (protocol === "plain_dns" && !normalizedPlainDnsServer) return createFailure(normalizedHostname, normalizedEndpoint, family, "plain_dns", "No Mullvad DNS server configured.");
+
+    try {
+        if (protocol === "plain_dns") {
+            return resolvePlain(normalizedHostname, normalizedEndpoint, normalizedPlainDnsServer, family, normalizedTimeoutMs);
+        }
+
+        const dohResult = await resolveDoh(normalizedHostname, normalizedEndpoint, family, normalizedTimeoutMs);
+        if (dohResult.success || protocol === "doh" || !normalizedPlainDnsServer) return dohResult;
+
+        const plainResult = await resolvePlain(normalizedHostname, normalizedEndpoint, normalizedPlainDnsServer, family, normalizedTimeoutMs);
+        if (plainResult.success) return plainResult;
+
+        return {
+            ...plainResult,
+            error: `${dohResult.error ?? "DoH failed."} Plain DNS fallback failed: ${plainResult.error ?? "No addresses returned."}`
+        };
+    } catch (error) {
+        return createFailure(normalizedHostname, normalizedEndpoint, family, getFallbackProtocol(protocol), getErrorMessage(error));
+    }
 }
 
 export async function preloadDNS(
@@ -308,7 +456,15 @@ export async function preloadDNS(
     protocol: ResolveProtocol = "automatic",
     plainDnsServer = ""
 ) {
-    const results = await Promise.all(hostnames.map(async hostname => {
+    if (!Array.isArray(hostnames)) return {};
+
+    const normalizedHostnames: string[] = [];
+    for (const hostname of hostnames.slice(0, MAX_PRELOAD_HOSTNAMES)) {
+        const normalizedHostname = normalizeHostname(hostname);
+        if (normalizedHostname) normalizedHostnames.push(normalizedHostname);
+    }
+
+    const results = await Promise.all(normalizedHostnames.map(async hostname => {
         const result = await resolveDNS(_event, hostname, endpoint, family, timeoutMs, protocol, plainDnsServer);
         return [hostname, result.addresses] as const;
     }));
