@@ -6,12 +6,10 @@
 
 import "./styles.css";
 
-import { EquicordDevs } from "@utils/constants";
 import definePlugin from "@utils/types";
-import { Channel, User } from "@vencord/discord-types";
+import type { Channel, User } from "@vencord/discord-types";
 import { ChannelType } from "@vencord/discord-types/enums";
-import { findByPropsLazy } from "@webpack";
-import { ChannelStore, UserProfileStore, UserStore, VoiceStateStore } from "@webpack/common";
+import { ChannelActionCreators, ChannelActions, ChannelStore, UserProfileStore, UserStore, VoiceStateStore } from "@webpack/common";
 
 import { openBlockedWarningModal } from "./BlockedWarningModal";
 import { DetectBlockBadge } from "./DetectBlockBadge";
@@ -22,8 +20,11 @@ interface VoiceState {
     channelId?: string;
 }
 
-const VoiceChannelActions = findByPropsLazy("selectVoiceChannel") as {
+const VoiceChannelActions = ChannelActions as {
     selectVoiceChannel(channelId: string | null): unknown;
+};
+const PrivateChannelActions = ChannelActionCreators as {
+    closePrivateChannel(channelId: string): unknown;
 };
 
 const warnedVoiceKeys = new Map<string, string>();
@@ -45,7 +46,7 @@ function getDisplayName(user: User | undefined) {
     return user.globalName || user.username;
 }
 
-function getBlockedVoiceUserIds(channelId: string) {
+function getVoiceCandidateUserIds(channelId: string) {
     const states = VoiceStateStore.getVoiceStatesForChannel(channelId) as Record<string, VoiceState> | null;
     if (!states) return [];
 
@@ -92,17 +93,22 @@ async function maybeWarnBeforeVoiceJoin(channelId: string, proceed: () => void |
             return Promise.resolve(proceed());
         }
 
-        const blockedUserIds = getBlockedVoiceUserIds(channelId).sort();
-        const blockedUsers = await getBlockedUsers(blockedUserIds);
+        const candidateUserIds = getVoiceCandidateUserIds(channelId).sort();
+        const blockedUsers = await getBlockedUsers(candidateUserIds);
         if (generation !== activeGeneration || attemptId !== latestVoiceJoinAttempt) return;
-        const latestBlockedUserIds = getBlockedVoiceUserIds(channelId).sort();
-        if (!latestBlockedUserIds.length || !sameUserIds(blockedUserIds, latestBlockedUserIds)) {
+        if (!blockedUsers.length) {
             return Promise.resolve(proceed());
         }
 
+        const latestCandidateUserIds = getVoiceCandidateUserIds(channelId).sort();
+        if (!latestCandidateUserIds.length || !sameUserIds(candidateUserIds, latestCandidateUserIds)) {
+            return Promise.resolve(proceed());
+        }
+
+        const blockedUserIds = blockedUsers.map(user => user.userId);
         openBlockedWarningModal({
             blockedNames: blockedUsers.map(user => user.name),
-            blockedUserIds: latestBlockedUserIds,
+            blockedUserIds,
             variant: "voiceJoin",
             onConfirm: () => {
                 if (generation !== activeGeneration || attemptId !== latestVoiceJoinAttempt) return;
@@ -133,40 +139,52 @@ async function maybeWarnForCurrentVoiceChannel(channelId: string) {
     };
 
     pendingState.promise = (async () => {
-        const blockedUserIds = getBlockedVoiceUserIds(channelId).sort();
-        const previousBlockedUserIds = seenVoiceChannelMembers.get(channelId);
+        const candidateUserIds = getVoiceCandidateUserIds(channelId).sort();
+        const previousCandidateUserIds = seenVoiceChannelMembers.get(channelId);
 
-        if (!blockedUserIds.length) {
+        if (!candidateUserIds.length) {
             seenVoiceChannelMembers.delete(channelId);
             warnedVoiceKeys.delete(channelId);
             return;
         }
 
-        const hasNewBlockedUser = previousBlockedUserIds == null || blockedUserIds.some(userId => !previousBlockedUserIds.has(userId));
-        if (!hasNewBlockedUser) return;
+        const hasNewCandidateUser = previousCandidateUserIds == null || candidateUserIds.some(userId => !previousCandidateUserIds.has(userId));
+        if (!hasNewCandidateUser) {
+            if (previousCandidateUserIds && previousCandidateUserIds.size !== candidateUserIds.length) {
+                seenVoiceChannelMembers.set(channelId, new Set(candidateUserIds));
+                warnedVoiceKeys.delete(channelId);
+            }
+            return;
+        }
 
-        const blockedUsers = await getBlockedUsers(blockedUserIds);
+        const blockedUsers = await getBlockedUsers(candidateUserIds);
         if (generation !== activeGeneration) return;
 
-        const latestBlockedUserIds = getBlockedVoiceUserIds(channelId).sort();
-        if (!latestBlockedUserIds.length) {
+        const latestCandidateUserIds = getVoiceCandidateUserIds(channelId).sort();
+        if (!latestCandidateUserIds.length) {
             seenVoiceChannelMembers.delete(channelId);
             warnedVoiceKeys.delete(channelId);
             return;
         }
 
-        if (!sameUserIds(blockedUserIds, latestBlockedUserIds)) return;
+        if (!sameUserIds(candidateUserIds, latestCandidateUserIds)) return;
 
-        seenVoiceChannelMembers.set(channelId, new Set(latestBlockedUserIds));
+        seenVoiceChannelMembers.set(channelId, new Set(latestCandidateUserIds));
 
-        const warningKey = latestBlockedUserIds.join(",");
+        if (!blockedUsers.length) {
+            warnedVoiceKeys.delete(channelId);
+            return;
+        }
+
+        const blockedUserIds = blockedUsers.map(user => user.userId);
+        const warningKey = blockedUserIds.join(",");
         if (warnedVoiceKeys.get(channelId) === warningKey) return;
 
         warnedVoiceKeys.set(channelId, warningKey);
 
         openBlockedWarningModal({
             blockedNames: blockedUsers.map(user => user.name),
-            blockedUserIds: latestBlockedUserIds,
+            blockedUserIds,
             variant: "voiceLeave",
             onConfirm: () => {
                 if (generation !== activeGeneration) return;
@@ -195,9 +213,12 @@ async function maybeWarnForGroupChannel(channelId: string) {
 
     const currentRecipientKey = [...channel.recipients].sort().join(",");
     if (warnedGroupChannels.get(channelId) === currentRecipientKey) return;
+    const generation = activeGeneration;
 
     const pendingPromise = (async () => {
         const blockedUsers = await getBlockedUsers(channel.recipients);
+        if (generation !== activeGeneration) return;
+
         const latestChannel = ChannelStore.getChannel(channelId);
         if (latestChannel?.type !== ChannelType.GROUP_DM) return;
 
@@ -214,7 +235,10 @@ async function maybeWarnForGroupChannel(channelId: string) {
             blockedNames: blockedUsers.map(user => user.name),
             blockedUserIds: blockedUsers.map(user => user.userId),
             variant: "group",
-            onConfirm: () => void 0
+            onConfirm: () => {
+                if (generation !== activeGeneration) return;
+                void PrivateChannelActions.closePrivateChannel(channelId);
+            }
         });
     })().finally(() => {
         if (pendingGroupWarnings.get(channelId) === pendingPromise) {
@@ -231,7 +255,10 @@ let originalSelectVoiceChannel: typeof VoiceChannelActions.selectVoiceChannel | 
 export default definePlugin({
     name: "DetectBlock",
     description: "Detects users who have blocked you and warns when they appear in voice channels or group DMs.",
-    authors: [EquicordDevs.justjxke],
+    authors: [
+        { name: "justjxke", id: 852558183087472640n },
+        { name: "irritably", id: 928787166916640838n }
+    ],
     flux: {
         USER_PROFILE_FETCH_SUCCESS({ userProfile }: { userProfile: { user: User; user_profile: unknown | null; }; }) {
             const userId = userProfile.user.id;
@@ -242,14 +269,19 @@ export default definePlugin({
         VOICE_STATE_UPDATES({ voiceStates }: { voiceStates: VoiceState[]; }) {
             const currentUserId = UserStore.getCurrentUser().id;
             const myState = VoiceStateStore.getVoiceStateForUser(currentUserId);
-            if (!myState?.channelId) return;
+            if (!myState?.channelId) {
+                warnedVoiceKeys.clear();
+                seenVoiceChannelMembers.clear();
+                return;
+            }
 
-            const joinedCurrentChannel = voiceStates.some(state =>
+            const seenMembers = seenVoiceChannelMembers.get(myState.channelId);
+            const changedCurrentChannel = voiceStates.some(state =>
                 state.userId !== currentUserId &&
-                state.channelId === myState.channelId
+                (state.channelId === myState.channelId || seenMembers?.has(state.userId))
             );
 
-            if (!joinedCurrentChannel) return;
+            if (!changedCurrentChannel) return;
 
             void maybeWarnForCurrentVoiceChannel(myState.channelId);
         },
@@ -263,15 +295,17 @@ export default definePlugin({
     },
     start() {
         activeGeneration++;
-        originalSelectVoiceChannel ??= VoiceChannelActions.selectVoiceChannel.bind(VoiceChannelActions);
-        VoiceChannelActions.selectVoiceChannel = ((channelId: string | null) => {
-            if (!originalSelectVoiceChannel || channelId == null) {
-                return originalSelectVoiceChannel?.(channelId);
+        originalSelectVoiceChannel ??= VoiceChannelActions.selectVoiceChannel;
+        VoiceChannelActions.selectVoiceChannel = (function selectVoiceChannel(channelId: string | null) {
+            const selectVoiceChannel = originalSelectVoiceChannel;
+            if (!selectVoiceChannel) return;
+            if (channelId == null) {
+                return selectVoiceChannel.call(VoiceChannelActions, channelId);
             }
 
             latestVoiceJoinAttempt++;
             return maybeWarnBeforeVoiceJoin(channelId, () => {
-                originalSelectVoiceChannel?.(channelId);
+                selectVoiceChannel.call(VoiceChannelActions, channelId);
             });
         }) as typeof VoiceChannelActions.selectVoiceChannel;
     },

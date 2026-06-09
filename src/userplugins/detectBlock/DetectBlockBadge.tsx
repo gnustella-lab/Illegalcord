@@ -7,19 +7,31 @@
 import { NoEntrySignIcon } from "@components/Icons";
 import { classNameFactory } from "@utils/css";
 import { classes } from "@utils/misc";
-import { User } from "@vencord/discord-types";
+import type { User } from "@vencord/discord-types";
 import { Tooltip, useEffect, useState } from "@webpack/common";
 
-import { ensureDetection, getDetectionRecord, getDetectionTtlMs, subscribeToDetection } from "./detection";
+import { type DetectionRecord, ensureDetection, getDetectionRecord, getDetectionTtlMs, subscribeToDetection } from "./detection";
 
 const cl = classNameFactory("vc-detect-block-");
 
+interface DetectionSnapshot {
+    userId: string;
+    record?: DetectionRecord;
+}
+
 function useBlockState(userId: string) {
-    const [record, setRecord] = useState(() => getDetectionRecord(userId));
+    const [snapshot, setSnapshot] = useState<DetectionSnapshot>(() => ({
+        userId,
+        record: getDetectionRecord(userId)
+    }));
+    const record = snapshot.userId === userId ? snapshot.record : getDetectionRecord(userId);
 
     useEffect(() => {
         const syncState = () => {
-            setRecord(getDetectionRecord(userId));
+            setSnapshot({
+                userId,
+                record: getDetectionRecord(userId)
+            });
         };
 
         syncState();
@@ -35,12 +47,12 @@ function useBlockState(userId: string) {
 
         const remainingMs = record.checkedAt + getDetectionTtlMs(record.state) - Date.now();
         if (remainingMs <= 0) {
-            setRecord(undefined);
+            setSnapshot({ userId });
             return;
         }
 
         const timeout = window.setTimeout(() => {
-            setRecord(undefined);
+            setSnapshot({ userId });
         }, remainingMs);
         return () => window.clearTimeout(timeout);
     }, [record, userId]);

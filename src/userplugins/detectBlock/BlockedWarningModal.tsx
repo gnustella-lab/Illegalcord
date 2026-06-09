@@ -12,6 +12,7 @@ import { ModalCloseButton, ModalContent, ModalFooter, ModalHeader, ModalRoot, Mo
 import { humanFriendlyJoin } from "@utils/text";
 import type { User } from "@vencord/discord-types";
 import { Avatar, UserStore } from "@webpack/common";
+import type { JSX, ReactNode } from "react";
 
 type WarningVariant = "voiceJoin" | "voiceLeave" | "group";
 
@@ -30,6 +31,13 @@ type WarningRecipe = {
 
 const cl = classNameFactory("vc-detect-block-");
 const WARNING_GRAPHIC_SRC = "https://cdn.discordapp.com/assets/content/f64aeb4eb878e4f0749f45b759fc3ee6f3a943329962bc573fcbe0ea7678870d.svg";
+type ModalComponent = (props: Record<string, unknown> & { children?: ReactNode; }) => JSX.Element;
+
+const DetectBlockModalRoot = ModalRoot as ModalComponent;
+const DetectBlockModalHeader = ModalHeader as ModalComponent;
+const DetectBlockModalContent = ModalContent as ModalComponent;
+const DetectBlockModalFooter = ModalFooter as ModalComponent;
+const DetectBlockModalCloseButton = ModalCloseButton as ModalComponent;
 
 const WARNING_RECIPES: Record<WarningVariant, WarningRecipe> = {
     voiceJoin: {
@@ -51,13 +59,13 @@ const WARNING_RECIPES: Record<WarningVariant, WarningRecipe> = {
         hearingText: "You can both hear each other",
     },
     group: {
-        title: "Join group?",
-        subtitle: "People who have blocked you are here. Leave group?",
+        title: "Leave group?",
+        subtitle: "Someone who has blocked you is in this group DM.",
         actions: [
             { text: "Stay here", variant: "secondary", confirms: false },
             { text: "Leave", variant: "primary", confirms: true },
         ],
-        hearingText: "You can both hear each other",
+        hearingText: "You can still see each other in this chat",
     },
 };
 
@@ -99,7 +107,7 @@ function WarningIcon() {
     );
 }
 
-function InfoRow({ icon, children }: { icon: React.ReactNode; children: React.ReactNode; }) {
+function InfoRow({ icon, children }: { icon: ReactNode; children: ReactNode; }) {
     return (
         <div className={cl("info-row")}>
             <div className={cl("info-icon")}>{icon}</div>
@@ -126,9 +134,9 @@ export function openBlockedWarningModal({
     const subjectText = getBlockedSubjectText(blockedNames, blockedUserIds);
 
     return openModal(modalProps => (
-        <ModalRoot {...modalProps} size={ModalSize.MEDIUM} className={cl("modal")}>
-            <ModalHeader separator={false} className={cl("header")}>
-                <ModalCloseButton onClick={modalProps.onClose} className={cl("close")} />
+        <DetectBlockModalRoot {...modalProps} size={ModalSize.MEDIUM} className={cl("modal")}>
+            <DetectBlockModalHeader separator={false} className={cl("header")}>
+                <DetectBlockModalCloseButton onClick={modalProps.onClose} className={cl("close")} />
                 <img alt="" aria-hidden="true" draggable={false} className={cl("graphic")} src={WARNING_GRAPHIC_SRC} />
                 <BaseText tag="h1" size="xl" weight="semibold" color="text-strong" className={cl("title")}>
                     {recipe.title}
@@ -136,9 +144,9 @@ export function openBlockedWarningModal({
                 <BaseText size="md" weight="normal" color="text-muted" className={cl("subtitle")}>
                     {recipe.subtitle}
                 </BaseText>
-            </ModalHeader>
+            </DetectBlockModalHeader>
 
-            <ModalContent className={cl("content")}>
+            <DetectBlockModalContent className={cl("content")}>
                 <div className={cl("info-group")}>
                     <InfoRow icon={getAvatar(avatarUser, blockedUserIds[0] ?? "")}>
                         <span className={cl("subject")}>
@@ -153,9 +161,9 @@ export function openBlockedWarningModal({
                         {recipe.hearingText}
                     </InfoRow>
                 </div>
-            </ModalContent>
+            </DetectBlockModalContent>
 
-            <ModalFooter className={cl("footer-shell")}>
+            <DetectBlockModalFooter className={cl("footer-shell")}>
                 <Flex className={cl("footer")}>
                     {recipe.actions.map(action => (
                         <Button
@@ -171,7 +179,7 @@ export function openBlockedWarningModal({
                         </Button>
                     ))}
                 </Flex>
-            </ModalFooter>
-        </ModalRoot>
+            </DetectBlockModalFooter>
+        </DetectBlockModalRoot>
     ));
 }
