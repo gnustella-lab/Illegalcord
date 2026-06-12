@@ -37,6 +37,7 @@ I plugin inclusi possono essere trovati [qui](https://equicord.org/plugins).
 - **FastGifPicker**
 - **MassMention**
 - **WebRTCLeakPrevent**
+- **MultiInstance**
 - **Client Diagnostics**
 - **AutoModBypass**
 - **ServerCloner**
