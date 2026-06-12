@@ -37,6 +37,7 @@ Our included plugins can be found [here](https://equicord.org/plugins).
 - **FastGifPicker**
 - **MassMention**
 - **WebRTCLeakPrevent**
+- **MultiInstance**
 - **Client Diagnostics**
 - **AutoModBypass**
 - **Securecord** | (AES 256 on messages)
