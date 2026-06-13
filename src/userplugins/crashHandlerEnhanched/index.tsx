@@ -241,6 +241,17 @@ function getErrorMessage(error: unknown) {
     if (typeof error === "string") return error;
     if (error == null) return "Unknown crash.";
 
+    const record = asRecord(error);
+    const message = record?.message ?? record?.error ?? record?.reason;
+    if (typeof message === "string" && message) return message;
+
+    try {
+        const serialized = JSON.stringify(error);
+        if (serialized && serialized !== "{}") return serialized;
+    } catch {
+        return String(error);
+    }
+
     return String(error);
 }
 
@@ -764,6 +775,15 @@ function isIgnorableGlobalError(error: unknown) {
     return getErrorMessage(error).startsWith("The play() request was interrupted ");
 }
 
+function isIgnorableUnhandledRejection(error: unknown) {
+    if (isIgnorableGlobalError(error)) return true;
+
+    const record = asRecord(error);
+    if (!record) return false;
+
+    return !["message", "stack", "error", "reason"].some(key => typeof record[key] === "string");
+}
+
 function handleGlobalError(event: ErrorEvent) {
     if (!settings.store.captureGlobalErrors) return;
 
@@ -783,7 +803,7 @@ function handleUnhandledRejection(event: PromiseRejectionEvent) {
     if (!settings.store.captureGlobalErrors) return;
 
     const error = normalizeGlobalError(event.reason, "Unhandled promise rejection.");
-    if (isIgnorableGlobalError(error)) return;
+    if (isIgnorableUnhandledRejection(error)) return;
 
     handleCrash(
         { setState: () => undefined },

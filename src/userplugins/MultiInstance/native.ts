@@ -247,8 +247,7 @@ export async function openInstance(
         win.on("enter-html-full-screen", () => win.setFullScreen(true));
         win.on("leave-html-full-screen", () => win.setFullScreen(false));
 
-        webContents.on("will-navigate", event => {
-            const { url } = event;
+        webContents.on("will-navigate", (event, url) => {
             if (!isDiscordUrl(url)) event.preventDefault();
         });
 
