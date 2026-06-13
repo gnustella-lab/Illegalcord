@@ -789,8 +789,7 @@ function isIgnorableGlobalError(error: unknown) {
     const message = getErrorMessage(error);
 
     return message.startsWith("The play() request was interrupted ") ||
-        message === "ResizeObserver loop completed with undelivered notifications." ||
-        message === "ResizeObserver loop limit exceeded";
+        message.startsWith("ResizeObserver loop ");
 }
 
 function isIgnorableUnhandledRejection(error: unknown) {
