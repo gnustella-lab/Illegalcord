@@ -54,6 +54,8 @@ const NO_PLUGIN_DETECTED = "No plugin detected";
 const NO_PLUGIN_DETECTION_REASON = "The crash stack did not match any enabled plugin.";
 const NO_PLUGIN_DISABLED = "None";
 const NO_PLUGIN_DISABLE_REASON = "No plugin was disabled.";
+const MESSAGE_SEND_FORBIDDEN_RE = /^POST \/channels\/(?:\d+|xxx)\/messages \[403\]$/;
+const USER_PROFILE_UNAVAILABLE_RE = /^GET \/users\/(?:\d+|xxx)\/profile \[(?:404|409)\]$/;
 const Native = VencordNative.pluginHelpers.CrashHandlerEnhanced as PluginNative<typeof NativeModule> | undefined;
 
 type DetectionConfidence = "none" | "low" | "medium" | "high";
@@ -845,9 +847,19 @@ function isIgnorableGlobalError(error: unknown) {
         message.startsWith("ResizeObserver loop ");
 }
 
+function isIgnorableDiscordRejection(error: unknown) {
+    const message = getErrorMessage(error);
+
+    if (message === "Aborted") return true;
+
+    return MESSAGE_SEND_FORBIDDEN_RE.test(message) ||
+        USER_PROFILE_UNAVAILABLE_RE.test(message);
+}
+
 function isIgnorableUnhandledRejection(error: unknown) {
     if (isIgnorableGlobalError(error)) return true;
     if (error == null) return true;
+    if (isIgnorableDiscordRejection(error)) return true;
     if (error instanceof Error || typeof error === "string") return false;
 
     return !getObjectErrorMessage(error);
