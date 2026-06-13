@@ -163,12 +163,10 @@ export default definePlugin({
                 name: "count",
                 description: "Number of your messages to silently delete.",
                 type: ApplicationCommandOptionType.INTEGER,
-                required: true,
-                minValue: 1,
-                maxValue: MAX_PURGE_COUNT
+                required: true
             }],
             execute: (opts, ctx) => {
-                const count = opts.find(o => o.name === "count")?.value as number;
+                const count = Math.min(Number(opts.find(o => o.name === "count")?.value), MAX_PURGE_COUNT);
                 if (!count || count < 1) return;
 
                 const channelId = ctx.channel.id;
@@ -231,7 +229,7 @@ export default definePlugin({
                 onClick: () => silentDeleteMessage(msg.channel_id, msg.id),
                 dangerous: true
             };
-        });
+        }, SilentDeleteIcon);
     },
 
     stop() {

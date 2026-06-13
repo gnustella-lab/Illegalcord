@@ -10,7 +10,7 @@ import { Logger } from "@utils/Logger";
 import definePlugin from "@utils/types";
 import { Message } from "@vencord/discord-types";
 import { findByPropsLazy } from "@webpack";
-import { UserStore } from "@webpack/common";
+import { ChannelStore, UserStore } from "@webpack/common";
 
 import { settings } from "./settings";
 import type { ClaimRequest, WebhookResult } from "./types";
@@ -67,7 +67,7 @@ function createClaimRequest(message: Message): ClaimRequest | null {
             ? `https://cdn.discordapp.com/avatars/${authorId}/${authorAvatar}.png?size=128`
             : undefined,
         channelId: message.channel_id,
-        guildId: message.guild_id,
+        guildId: ChannelStore.getChannel(message.channel_id)?.guild_id,
         messageId: message.id
     };
 }

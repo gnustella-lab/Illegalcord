@@ -25,7 +25,7 @@ export async function fetchGuildData(guildId: string): Promise<any> {
 
 export function extractChannels(guildId: string, includeHidden = false): any[] {
     try {
-        const channelsData = GuildChannelStore.getChannels(guildId, includeHidden);
+        const channelsData = GuildChannelStore.getChannels(guildId);
         if (!channelsData) return [];
 
         const channels: any[] = [];

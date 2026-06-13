@@ -658,6 +658,22 @@ export const Devs = /* #__PURE__*/ Object.freeze({
         name: "u32",
         id: 1063237286818488351n,
     },
+    sadie: {
+        name: "sadie",
+        id: 0n
+    },
+    feelslove: {
+        name: "feelslove",
+        id: 249620332925812736n
+    },
+    Nerdwave: {
+        name: "Nerdwave",
+        id: 1424997641821098026n
+    },
+    Xylen: {
+        name: "Xylen",
+        id: 185344151510974464n
+    },
     prism: {
         name: "prism",
         id: 390884143749136386n,
