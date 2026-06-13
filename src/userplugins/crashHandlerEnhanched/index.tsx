@@ -760,13 +760,20 @@ function normalizeGlobalError(error: unknown, fallback: string) {
     return error;
 }
 
+function isIgnorableGlobalError(error: unknown) {
+    return getErrorMessage(error).startsWith("The play() request was interrupted ");
+}
+
 function handleGlobalError(event: ErrorEvent) {
     if (!settings.store.captureGlobalErrors) return;
+
+    const error = normalizeGlobalError(event.error, event.message || "Window error.");
+    if (isIgnorableGlobalError(error)) return;
 
     handleCrash(
         { setState: () => undefined },
         {
-            error: normalizeGlobalError(event.error, event.message || "Window error."),
+            error,
             info: { componentStack: "Captured by window error listener." }
         }
     );
@@ -775,10 +782,13 @@ function handleGlobalError(event: ErrorEvent) {
 function handleUnhandledRejection(event: PromiseRejectionEvent) {
     if (!settings.store.captureGlobalErrors) return;
 
+    const error = normalizeGlobalError(event.reason, "Unhandled promise rejection.");
+    if (isIgnorableGlobalError(error)) return;
+
     handleCrash(
         { setState: () => undefined },
         {
-            error: normalizeGlobalError(event.reason, "Unhandled promise rejection."),
+            error,
             info: { componentStack: "Captured by unhandled rejection listener." }
         }
     );
