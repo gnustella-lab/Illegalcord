@@ -236,14 +236,25 @@ function isDraftTypes(value: unknown): value is DraftTypes {
     );
 }
 
+function getErrorText(value: unknown) {
+    if (value instanceof Error) return value.message || value.name;
+    if (typeof value === "string" && value) return value;
+}
+
+function getObjectErrorMessage(error: unknown) {
+    const record = asRecord(error);
+    if (!record) return undefined;
+
+    return getErrorText(record.message) ?? getErrorText(record.error) ?? getErrorText(record.reason);
+}
+
 function getErrorMessage(error: unknown) {
-    if (error instanceof Error) return error.message || error.name;
-    if (typeof error === "string") return error;
+    const text = getErrorText(error);
+    if (text) return text;
     if (error == null) return "Unknown crash.";
 
-    const record = asRecord(error);
-    const message = record?.message ?? record?.error ?? record?.reason;
-    if (typeof message === "string" && message) return message;
+    const message = getObjectErrorMessage(error);
+    if (message) return message;
 
     try {
         const serialized = JSON.stringify(error);
@@ -256,9 +267,12 @@ function getErrorMessage(error: unknown) {
 }
 
 function getErrorStack(error: unknown) {
-    if (!(error instanceof Error)) return undefined;
+    if (error instanceof Error) return error.stack;
 
-    return error.stack;
+    const record = asRecord(error);
+    if (typeof record?.stack === "string") return record.stack;
+
+    return undefined;
 }
 
 function getComponentStack(info: unknown) {
@@ -772,16 +786,19 @@ function normalizeGlobalError(error: unknown, fallback: string) {
 }
 
 function isIgnorableGlobalError(error: unknown) {
-    return getErrorMessage(error).startsWith("The play() request was interrupted ");
+    const message = getErrorMessage(error);
+
+    return message.startsWith("The play() request was interrupted ") ||
+        message === "ResizeObserver loop completed with undelivered notifications." ||
+        message === "ResizeObserver loop limit exceeded";
 }
 
 function isIgnorableUnhandledRejection(error: unknown) {
     if (isIgnorableGlobalError(error)) return true;
+    if (error == null) return true;
+    if (error instanceof Error || typeof error === "string") return false;
 
-    const record = asRecord(error);
-    if (!record) return false;
-
-    return !["message", "stack", "error", "reason"].some(key => typeof record[key] === "string");
+    return !getObjectErrorMessage(error);
 }
 
 function handleGlobalError(event: ErrorEvent) {
@@ -802,8 +819,9 @@ function handleGlobalError(event: ErrorEvent) {
 function handleUnhandledRejection(event: PromiseRejectionEvent) {
     if (!settings.store.captureGlobalErrors) return;
 
+    if (isIgnorableUnhandledRejection(event.reason)) return;
+
     const error = normalizeGlobalError(event.reason, "Unhandled promise rejection.");
-    if (isIgnorableUnhandledRejection(error)) return;
 
     handleCrash(
         { setState: () => undefined },
