@@ -56,6 +56,7 @@ const NO_PLUGIN_DISABLED = "None";
 const NO_PLUGIN_DISABLE_REASON = "No plugin was disabled.";
 const MESSAGE_SEND_FORBIDDEN_RE = /^POST \/channels\/(?:\d+|xxx)\/messages \[403\]$/;
 const USER_PROFILE_UNAVAILABLE_RE = /^GET \/users\/(?:\d+|xxx)\/profile \[(?:404|409)\]$/;
+const SOCKET_ALIVE_TIMEOUT_RE = /^(?:Max tries exceeded, last error: Error: )?socket alive timeout$/;
 const Native = VencordNative.pluginHelpers.CrashHandlerEnhanced as PluginNative<typeof NativeModule> | undefined;
 
 type DetectionConfidence = "none" | "low" | "medium" | "high";
@@ -191,6 +192,11 @@ const settings = definePluginSettings({
         description: "Show a small recovery notification after the crash is handled.",
         default: true
     },
+    notifyOncePerPlugin: {
+        type: OptionType.BOOLEAN,
+        description: "Only show one crash notification per suspected plugin each session.",
+        default: true
+    },
     lastCrashReport: {
         type: OptionType.STRING,
         description: "Stores the latest crash report.",
@@ -219,6 +225,7 @@ let queuedPopupReport: CrashReport | null = null;
 let recentCrashTimes: number[] = [];
 let recentPluginCrashes: PluginCrashAttribution[] = [];
 let pluginBreadcrumbs: PluginBreadcrumb[] = [];
+const notifiedPluginNames = new Set<string>();
 let crashLogWriteQueue: Promise<void> = Promise.resolve();
 let instrumentationIntervalId: number | undefined;
 let globalListenersInstalled = false;
@@ -772,6 +779,18 @@ function writeCrashLog(report: CrashReport) {
         });
 }
 
+function shouldNotifyCrash(report: CrashReport) {
+    if (!settings.store.notifyOncePerPlugin || report.suspectedPlugin === NO_PLUGIN_DETECTED) return true;
+
+    return !notifiedPluginNames.has(report.suspectedPlugin);
+}
+
+function rememberCrashNotification(report: CrashReport) {
+    if (!settings.store.notifyOncePerPlugin || report.suspectedPlugin === NO_PLUGIN_DETECTED) return;
+
+    notifiedPluginNames.add(report.suspectedPlugin);
+}
+
 function openCrashLogsFolder() {
     if (!Native?.openCrashLogDir) {
         showNotification({
@@ -828,9 +847,10 @@ function handleCrash(boundary: CrashBoundary, errorState: CrashErrorState) {
         writeCrashLog(report);
         isRecovering = false;
         const popupReport = queuedPopupReport ?? report;
+        const shouldNotify = shouldNotifyCrash(popupReport);
         queuedPopupReport = null;
 
-        if (settings.store.showRecoveryToast) {
+        if (shouldNotify && settings.store.showRecoveryToast) {
             try {
                 showNotification({
                     color: report.recovered ? "#43b581" : "#f23f43",
@@ -843,7 +863,13 @@ function handleCrash(boundary: CrashBoundary, errorState: CrashErrorState) {
             }
         }
 
-        openCrashSupportModal(popupReport);
+        if (shouldNotify && (settings.store.showRecoveryToast || settings.store.showSupportPopup)) {
+            rememberCrashNotification(popupReport);
+        }
+
+        if (shouldNotify) {
+            openCrashSupportModal(popupReport);
+        }
     }, 50);
 }
 
@@ -868,7 +894,8 @@ function isIgnorableDiscordRejection(error: unknown) {
     if (message === "Aborted") return true;
 
     return MESSAGE_SEND_FORBIDDEN_RE.test(message) ||
-        USER_PROFILE_UNAVAILABLE_RE.test(message);
+        USER_PROFILE_UNAVAILABLE_RE.test(message) ||
+        SOCKET_ALIVE_TIMEOUT_RE.test(message);
 }
 
 function isIgnorableUnhandledRejection(error: unknown) {

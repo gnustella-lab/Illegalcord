@@ -85,6 +85,7 @@ const quickQualityPresets = [
     { label: "Sharp 1080p75", width: 1920, height: 1080, framerate: 75, videoBitrate: 5000 },
     { label: "High 1440p144", width: 2560, height: 1440, framerate: 144, videoBitrate: 10000 },
 ] satisfies QuickQualityPreset[];
+const quickQualityPresetNames = new Set(quickQualityPresets.map(preset => preset.label));
 
 const quickResolutions = [
     { label: "480p", width: 720, height: 480 },
@@ -169,6 +170,13 @@ function isQualityPresetActive(preset: QuickQualityPreset, profile: ScreenshareP
         && profile.videoBitrate === preset.videoBitrate;
 }
 
+function getActiveQualityPreset(profile: NamedScreenshareProfile, customPresets: QuickQualityPreset[]) {
+    return customPresets.find(preset => preset.label === profile.name && isQualityPresetActive(preset, profile))
+        ?? quickQualityPresets.find(preset => preset.label === profile.name && isQualityPresetActive(preset, profile))
+        ?? quickQualityPresets.find(preset => isQualityPresetActive(preset, profile))
+        ?? customPresets.find(preset => isQualityPresetActive(preset, profile));
+}
+
 function getCustomQualityPresets() {
     const { getProfiles } = screenshareStore.get();
     const presets: QuickQualityPreset[] = [];
@@ -213,6 +221,13 @@ function saveCustomQualityPreset(name: string, preset: QuickQualityPreset) {
     showToast(`BetterScreenshare: ${name} saved.`, Toasts.Type.SUCCESS);
 }
 
+function updateCurrentProfile(profile: Partial<NamedScreenshareProfile>) {
+    screenshareStore.get().setCurrentProfile(currentProfile => ({
+        ...currentProfile,
+        ...profile
+    }));
+}
+
 interface CreateQualityPresetModalProps {
     modalProps: RenderModalProps;
     preset: QuickQualityPreset;
@@ -222,7 +237,7 @@ function CreateQualityPresetModal({ modalProps, preset }: CreateQualityPresetMod
     const [name, setName] = useState(() => getSuggestedQualityPresetName(preset));
     const trimmedName = name.trim();
     const { getDefaultProfiles, getProfiles } = screenshareStore.get();
-    const isDefaultName = getDefaultProfiles().some(profile => profile.name === trimmedName);
+    const isReservedName = quickQualityPresetNames.has(trimmedName) || getDefaultProfiles().some(profile => profile.name === trimmedName);
     const alreadyExists = getProfiles(false).some(profile => profile.name === trimmedName);
 
     return (
@@ -231,7 +246,7 @@ function CreateQualityPresetModal({ modalProps, preset }: CreateQualityPresetMod
             size="sm"
             title="Save Custom Quality Preset"
             subtitle={`${preset.height}p, ${preset.framerate} FPS, ${preset.videoBitrate} kbps.`}
-            notice={isDefaultName ? { message: "Default preset names are reserved.", type: "critical" } : undefined}
+            notice={isReservedName ? { message: "Built-in preset names are reserved.", type: "critical" } : undefined}
             actions={[
                 {
                     text: "Cancel",
@@ -241,7 +256,7 @@ function CreateQualityPresetModal({ modalProps, preset }: CreateQualityPresetMod
                 {
                     text: "Save",
                     variant: "primary",
-                    disabled: !trimmedName || isDefaultName,
+                    disabled: !trimmedName || isReservedName,
                     onClick: () => {
                         saveCustomQualityPreset(trimmedName, preset);
                         modalProps.onClose();
@@ -255,7 +270,7 @@ function CreateQualityPresetModal({ modalProps, preset }: CreateQualityPresetMod
                 placeholder="My stream preset"
                 onChange={setName}
             />
-            {alreadyExists && !isDefaultName && (
+            {alreadyExists && !isReservedName && (
                 <Forms.FormText>A custom preset with this name already exists and will be overwritten.</Forms.FormText>
             )}
         </Modal>
@@ -273,41 +288,45 @@ function openCreateQualityPresetModal() {
     openModal(modalProps => <CreateQualityPresetModal modalProps={modalProps} preset={preset} />);
 }
 
-function applyQualityPreset(preset: QuickQualityPreset) {
-    const store = screenshareStore.get();
-
-    store.setWidth(preset.width);
-    store.setHeight(preset.height);
-    store.setResolutionEnabled(true);
-    store.setFramerate(preset.framerate);
-    store.setFramerateEnabled(true);
-    store.setVideoBitrate(preset.videoBitrate);
-    store.setVideoBitrateEnabled(true);
+function applyQualityPreset(preset: QuickQualityPreset, name = "") {
+    updateCurrentProfile({
+        name,
+        width: preset.width,
+        height: preset.height,
+        resolutionEnabled: true,
+        framerate: preset.framerate,
+        framerateEnabled: true,
+        videoBitrate: preset.videoBitrate,
+        videoBitrateEnabled: true
+    });
     notifyQuickSettingsChange(preset.label);
 }
 
 function applyResolution(width?: number, height?: number) {
-    const store = screenshareStore.get();
-
-    store.setWidth(width);
-    store.setHeight(height);
-    store.setResolutionEnabled(width !== undefined && height !== undefined);
+    updateCurrentProfile({
+        name: "",
+        width,
+        height,
+        resolutionEnabled: width !== undefined && height !== undefined
+    });
     notifyQuickSettingsChange(width && height ? `${height}p` : "Default resolution");
 }
 
 function applyFramerate(framerate?: number) {
-    const store = screenshareStore.get();
-
-    store.setFramerate(framerate);
-    store.setFramerateEnabled(framerate !== undefined);
+    updateCurrentProfile({
+        name: "",
+        framerate,
+        framerateEnabled: framerate !== undefined
+    });
     notifyQuickSettingsChange(framerate ? `${framerate} FPS` : "Default framerate");
 }
 
 function applyVideoBitrate(videoBitrate?: number) {
-    const store = screenshareStore.get();
-
-    store.setVideoBitrate(videoBitrate);
-    store.setVideoBitrateEnabled(videoBitrate !== undefined);
+    updateCurrentProfile({
+        name: "",
+        videoBitrate,
+        videoBitrateEnabled: videoBitrate !== undefined
+    });
     notifyQuickSettingsChange(videoBitrate ? `${videoBitrate} kbps` : "Default bitrate");
 }
 
@@ -317,6 +336,7 @@ const streamContextPatch: NavContextMenuPatchCallback = (children, props: Stream
 
     const { currentProfile } = screenshareStore.get();
     const customQualityPresets = getCustomQualityPresets();
+    const activeQualityPreset = getActiveQualityPreset(currentProfile, customQualityPresets);
     const menuItem = (
         <Menu.MenuItem
             id="better-screenshare-settings"
@@ -327,22 +347,22 @@ const streamContextPatch: NavContextMenuPatchCallback = (children, props: Stream
                 {quickQualityPresets.map(preset => (
                     <Menu.MenuRadioItem
                         key={preset.label}
-                        id={`better-screenshare-quality-${preset.height}-${preset.framerate}`}
+                        id={`better-screenshare-quality-${preset.width}-${preset.height}-${preset.framerate}-${preset.videoBitrate}`}
                         group="better-screenshare-quality"
                         label={preset.label}
-                        checked={isQualityPresetActive(preset, currentProfile)}
+                        checked={preset === activeQualityPreset}
                         action={() => applyQualityPreset(preset)}
                     />
                 ))}
                 {customQualityPresets.length > 0 && <Menu.MenuSeparator />}
                 {customQualityPresets.map((preset, index) => (
                     <Menu.MenuRadioItem
-                        key={preset.label}
+                        key={`${preset.label}-${index}`}
                         id={`better-screenshare-quality-custom-${index}`}
                         group="better-screenshare-quality"
                         label={preset.label}
-                        checked={isQualityPresetActive(preset, currentProfile)}
-                        action={() => applyQualityPreset(preset)}
+                        checked={preset === activeQualityPreset}
+                        action={() => applyQualityPreset(preset, preset.label)}
                     />
                 ))}
                 <Menu.MenuSeparator />
@@ -607,20 +627,6 @@ const BetterScreenshare = definePlugin({
             }
         },
         {
-            find: "#{intl::STREAM_FPS_OPTION}",
-            all: true,
-            replacement: [
-                {
-                    match: /guildPremiumTier:\i\.\i\.TIER_\d,?/g,
-                    replace: ""
-                },
-                {
-                    match: /\[\{.{0,25}\i\.\i\.FPS_15.{0,900}\}\]/,
-                    replace: "$self.patchStreamFramerates($&)"
-                }
-            ]
-        },
-        {
             find: "this.getDefaultGoliveQuality()",
             replacement: [
                 {
@@ -663,47 +669,58 @@ const BetterScreenshare = definePlugin({
 
         let updateTimeout: ReturnType<typeof setTimeout> | null = null;
 
-        const extractUserIdFromAvatar = (url: string): string | null => {
-            const match = url.match(/\/avatars\/(\d+)\//);
-            return match ? match[1] : null;
+        const getCurrentUserId = (): string | null => {
+            const user = UserStore.getCurrentUser();
+            return user?.id ?? null;
         };
 
-        const updateMainStreamQuality = () => {
-            const currentUser = UserStore.getCurrentUser();
-            if (!currentUser) return;
-
-            const topBar = document.querySelector('.topControls_bfe55a, [class*="topControls_"]');
-            if (!topBar) return;
-
-            const ownerAvatar = topBar.querySelector('img[class*="avatar__"], div[class*="avatar__"] > img');
-            if (!ownerAvatar || !(ownerAvatar instanceof HTMLImageElement)) return;
-
-            const ownerId = extractUserIdFromAvatar(ownerAvatar.src);
-            if (!ownerId || ownerId !== currentUser.id) return;
-
-            const qualityContainer = topBar.querySelector('[class*="streamQualityIndicator__"]');
-            if (!qualityContainer) return;
-
-            const resolutionSpan = qualityContainer.querySelector('[class*="qualityResolution__"]');
-            const fpsSpan = resolutionSpan?.nextElementSibling;
-            if (!resolutionSpan || !fpsSpan) return;
+        const updateMyStreamQuality = () => {
+            const currentUserId = getCurrentUserId();
+            if (!currentUserId) return;
 
             const { currentProfile } = screenshareStore.get();
             const { resolutionEnabled, height, framerateEnabled, framerate } = currentProfile;
 
-            let newResolution = resolutionSpan.textContent || "720p";
-            let newFps = (fpsSpan.textContent || "30 FPS").replace(" FPS", "");
-
+            let newResolution = "";
+            let newFps = "";
             if (resolutionEnabled && height) newResolution = `${height}p`;
             if (framerateEnabled && framerate) newFps = `${framerate}`;
 
-            if (resolutionSpan.textContent !== newResolution) resolutionSpan.textContent = newResolution;
-            if (fpsSpan.textContent !== `${newFps} FPS`) fpsSpan.textContent = `${newFps} FPS`;
+            const topBar = document.querySelector('[class*="topControls_"], [class*="controlSection_"]');
+            if (topBar) {
+                const avatarImg = topBar.querySelector('img[class*="avatar__"]');
+                if (avatarImg && avatarImg instanceof HTMLImageElement) {
+                    const userId = avatarImg.src.match(/\/avatars\/(\d+)\//)?.[1];
+                    if (userId === currentUserId) {
+                        const qualityContainer = topBar.querySelector('[class*="streamQualityIndicator__"]');
+                        if (qualityContainer) {
+                            const resolutionSpan = qualityContainer.querySelector('[class*="qualityResolution__"]');
+                            const fpsSpan = resolutionSpan?.nextElementSibling;
+                            if (resolutionSpan && fpsSpan) {
+                                if (newResolution && resolutionSpan.textContent !== newResolution) resolutionSpan.textContent = newResolution;
+                                if (newFps && fpsSpan.textContent !== `${newFps} FPS`) fpsSpan.textContent = `${newFps} FPS`;
+                            }
+                        }
+                    }
+                }
+            }
+
+            const myTiles = document.querySelectorAll(`[data-selenium-video-tile="${currentUserId}"]`);
+            for (const tile of myTiles) {
+                const qualityContainer = tile.querySelector('[class*="streamQualityIndicator__"]');
+                if (!qualityContainer) continue;
+                const resolutionSpan = qualityContainer.querySelector('[class*="qualityResolution__"]');
+                const fpsSpan = resolutionSpan?.nextElementSibling;
+                if (resolutionSpan && fpsSpan) {
+                    if (newResolution && resolutionSpan.textContent !== newResolution) resolutionSpan.textContent = newResolution;
+                    if (newFps && fpsSpan.textContent !== `${newFps} FPS`) fpsSpan.textContent = `${newFps} FPS`;
+                }
+            }
         };
 
         const debouncedUpdate = () => {
             if (updateTimeout) clearTimeout(updateTimeout);
-            updateTimeout = setTimeout(updateMainStreamQuality, 50);
+            updateTimeout = setTimeout(updateMyStreamQuality, 100);
         };
 
         this.qualityObserver = new MutationObserver(debouncedUpdate);
@@ -711,10 +728,10 @@ const BetterScreenshare = definePlugin({
             subtree: true,
             childList: true,
             attributes: true,
-            attributeFilter: ["class", "src"]
+            attributeFilter: ["class", "src", "data-selenium-video-tile"]
         });
 
-        updateMainStreamQuality();
+        updateMyStreamQuality();
     },
     stop(): void {
         this.unpatchChannelRTCStore?.();
