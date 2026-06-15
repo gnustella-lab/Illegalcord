@@ -893,6 +893,7 @@ function isIgnorableDiscordRejection(error: unknown) {
     const message = getErrorMessage(error);
 
     if (message === "Aborted") return true;
+    if (message.startsWith("Request has been terminated\n")) return true;
     if (message === "This gift has been redeemed already.") return true;
 
     return MESSAGE_SEND_FORBIDDEN_RE.test(message) ||
