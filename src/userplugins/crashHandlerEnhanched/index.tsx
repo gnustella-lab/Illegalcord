@@ -29,6 +29,7 @@ import { Flex } from "@components/Flex";
 import { CopyIcon, OpenExternalIcon, WarningIcon } from "@components/Icons";
 import { classNameFactory } from "@utils/css";
 import { copyWithToast } from "@utils/discord";
+import { SYM_LAZY_GET } from "@utils/lazy";
 import { Logger } from "@utils/Logger";
 import { relaunch } from "@utils/native";
 import definePlugin, { OptionType, type Plugin, type PluginNative } from "@utils/types";
@@ -371,6 +372,11 @@ function asRecord(value: unknown) {
     return value as Record<PropertyKey, unknown>;
 }
 
+function isLazyProxy(value: unknown) {
+    const record = asRecord(value);
+    return typeof record?.[SYM_LAZY_GET] === "function";
+}
+
 function wrapPluginCallback<T extends (this: unknown, ...args: unknown[]) => unknown>(pluginName: string, surface: string, original: T): T {
     const wrapped = function (this: unknown, ...args: unknown[]) {
         addPluginBreadcrumb(pluginName, surface);
@@ -398,7 +404,7 @@ function wrapObjectMethod(owner: Record<PropertyKey, unknown>, key: string, plug
     if (instrumentedKeys?.has(key)) return;
 
     const original = owner[key];
-    if (typeof original !== "function" || breadcrumbWrappedFunctions.has(original)) return;
+    if (typeof original !== "function" || breadcrumbWrappedFunctions.has(original) || isLazyProxy(original)) return;
 
     owner[key] = wrapPluginCallback(pluginName, surface, original as (this: unknown, ...args: unknown[]) => unknown);
     breadcrumbInstrumentedMethods.set(owner, new Set([...(instrumentedKeys ?? []), key]));
