@@ -185,8 +185,8 @@ const settings = definePluginSettings({
     },
     captureGlobalErrors: {
         type: OptionType.BOOLEAN,
-        description: "Record window errors and unhandled promise rejections.",
-        default: true
+        description: "Log window errors and unhandled promise rejections for debugging.",
+        default: false
     },
     showRecoveryToast: {
         type: OptionType.BOOLEAN,
@@ -464,6 +464,10 @@ function instrumentPlugin(plugin: Plugin) {
                 wrapObjectMethod(toolboxRecord, label, plugin.name, `toolbox ${label}`);
             }
         }
+    }
+
+    for (const key of Object.keys(pluginRecord)) {
+        wrapObjectMethod(pluginRecord, key, plugin.name, key);
     }
 }
 
@@ -920,13 +924,7 @@ function handleGlobalError(event: ErrorEvent) {
     const error = normalizeGlobalError(event.error, event.message || "Window error.");
     if (isIgnorableGlobalError(error)) return;
 
-    handleCrash(
-        { setState: () => undefined },
-        {
-            error,
-            info: { componentStack: "Captured by window error listener." }
-        }
-    );
+    logger.debug("Window error outside Discord crash boundary.", error);
 }
 
 function handleUnhandledRejection(event: PromiseRejectionEvent) {
@@ -936,13 +934,7 @@ function handleUnhandledRejection(event: PromiseRejectionEvent) {
 
     const error = normalizeGlobalError(event.reason, "Unhandled promise rejection.");
 
-    handleCrash(
-        { setState: () => undefined },
-        {
-            error,
-            info: { componentStack: "Captured by unhandled rejection listener." }
-        }
-    );
+    logger.debug("Unhandled rejection outside Discord crash boundary.", error);
 }
 
 function installGlobalListeners() {
