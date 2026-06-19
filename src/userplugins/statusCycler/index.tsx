@@ -32,13 +32,13 @@ interface SpotifyPlayerState {
     track: SpotifyTrack | null;
 }
 
-const IMPORT_SETTING_KEYS = ["phrases", "sourceFileName"] as const;
+const IMPORT_SETTING_KEYS: ("phrases" | "sourceFileName")[] = ["phrases", "sourceFileName"];
 const logger = new Logger("StatusCycler");
 const CustomStatusSettings = getUserSettingLazy<CustomStatusSetting | null>("status", "customStatus");
 
 let active = false;
-let intervalId: number | undefined;
-let lyricsTimeoutId: number | undefined;
+let intervalId: ReturnType<typeof setInterval> | undefined;
+let lyricsTimeoutId: ReturnType<typeof setTimeout> | undefined;
 let loadingSpotifyTrackId: string | undefined;
 let spotifyLyrics: SyncedLyric[] = [];
 let spotifyLyricsTrackId: string | undefined;
@@ -47,6 +47,7 @@ let spotifyPlaybackActive = false;
 let spotifyPosition = 0;
 let spotifyPositionUpdatedAt = 0;
 let lastLyricText: string | undefined;
+let lastStatusUpdateAt = 0;
 
 function getPhrases(value = settings.store.phrases) {
     return value.split(/\r?\n|\r/).map(line => line.trim()).filter(Boolean);
@@ -60,6 +61,7 @@ function applyNextStatus() {
     const nextIndex = (settings.store.nextIndex ?? 0) % phrases.length;
     const text = phrases[nextIndex];
     settings.store.nextIndex = (nextIndex + 1) % phrases.length;
+    lastStatusUpdateAt = Date.now();
 
     void CustomStatusSettings.updateSetting({
         text,
@@ -86,8 +88,15 @@ function scheduleSpotifyLyric() {
 
     const text = spotifyLyrics[currentIndex]?.text?.trim();
     if (text && text !== lastLyricText && CustomStatusSettings) {
+        const remainingDelay = settings.plain.spotifyLyricsUpdateDelay * 1_000 - (Date.now() - lastStatusUpdateAt);
+        if (remainingDelay > 0) {
+            lyricsTimeoutId = setTimeout(scheduleSpotifyLyric, remainingDelay);
+            return;
+        }
+
         const current = CustomStatusSettings.getSetting();
         lastLyricText = text;
+        lastStatusUpdateAt = Date.now();
 
         void CustomStatusSettings.updateSetting({
             text: text.slice(0, 128),
@@ -271,6 +280,13 @@ const settings = definePluginSettings({
         description: "Use synchronized Spotify lyrics as your custom status while Spotify is playing.",
         default: false,
         onChange: syncSpotifyLyrics
+    },
+    spotifyLyricsUpdateDelay: {
+        type: OptionType.NUMBER,
+        description: "Minimum seconds between Spotify lyric status updates. Set to 0 to disable the delay.",
+        default: 0,
+        isValid: (value: number) => value >= 0 || "Spotify lyrics update delay cannot be negative.",
+        onChange: scheduleSpotifyLyric
     },
     importFile: {
         type: OptionType.COMPONENT,
