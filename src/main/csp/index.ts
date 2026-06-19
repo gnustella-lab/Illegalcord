@@ -58,6 +58,7 @@ export const CspPolicies: PolicyMap = {
     "free.freeipapi.com": ConnectSrc,
     "ws.audioscrobbler.com": ConnectSrc, // Last.fm API
     "translate-pa.googleapis.com": ConnectSrc, // Google Translate API
+    "lrclib.net": ConnectSrc, // LRCLIB lyrics API
     "*.vencord.dev": ImageSrc, // VenCloud (api.vencord.dev) and Badges (badges.vencord.dev)
     "manti.vendicated.dev": ImageSrc, // ReviewDB API
     "decor.fieryflames.dev": ConnectSrc, // Decor API
