@@ -13,7 +13,6 @@ import ErrorBoundary from "@components/ErrorBoundary";
 import { Flex } from "@components/Flex";
 import { getLyrics } from "@equicordplugins/musicControls/spotify/lyrics/api";
 import type { SyncedLyric } from "@equicordplugins/musicControls/spotify/lyrics/providers/types";
-import { EquicordDevs } from "@utils/constants";
 import { Logger } from "@utils/Logger";
 import definePlugin, { OptionType, type PluginNative, type PluginSettingComponentProps } from "@utils/types";
 import { chooseFile } from "@utils/web";
@@ -607,7 +606,7 @@ const settings = definePluginSettings({
 export default definePlugin({
     name: "StatusCycler",
     description: "Automatically rotates through custom status phrases and emojis at a configurable interval.",
-    authors: [EquicordDevs.irritably],
+    authors: [{ name: "irritably", id: 928787166916640838n }],
     tags: ["Activity", "Utility"],
     dependencies: ["UserSettingsAPI"],
     settings,

@@ -12,14 +12,13 @@ import ErrorBoundary from "@components/ErrorBoundary";
 import { HeadphonesIcon, Microphone } from "@components/Icons";
 import { settings as musicControlsSettings } from "@equicordplugins/musicControls/settings";
 import { SpotifyStore } from "@equicordplugins/musicControls/spotify/SpotifyStore";
-import { EquicordDevs } from "@utils/constants";
 import { classNameFactory } from "@utils/css";
 import { useFixedTimer } from "@utils/react";
 import { formatDurationMs } from "@utils/text";
 import definePlugin, { OptionType } from "@utils/types";
 import type { Message, Stream } from "@vencord/discord-types";
-import { ApplicationStreamingStore, ChannelActions, ChannelStore, FluxDispatcher, IconUtils, MediaEngineStore, MessageStore, ReactDOM, SelectedChannelStore, Tooltip, useEffect, UserGuildSettingsStore, UserStore, useState, useStateFromStores, VoiceActions, VoiceStateStore } from "@webpack/common";
-import type { MouseEvent, ReactNode, SVGProps } from "react";
+import { ApplicationStreamingStore, ChannelActions, ChannelStore, Clickable, FluxDispatcher, GuildMemberStore, IconUtils, MediaEngineStore, MessageStore, ReactDOM, Tooltip, useEffect, useRef, UserGuildSettingsStore, UserStore, useState, useStateFromStores, VoiceActions, VoiceStateStore } from "@webpack/common";
+import type { MouseEvent, PointerEvent, ReactNode, SVGProps } from "react";
 
 interface ControlButtonProps {
     active?: boolean;
@@ -41,9 +40,30 @@ interface IslandNotification {
     title: string;
 }
 
+interface MessageWithMentions extends Omit<Message, "mentions"> {
+    mentions: Array<string | { id: string; }>;
+}
+
+interface SwipeStart {
+    pointerId: number;
+    startedAt: number;
+    x: number;
+    y: number;
+}
+
+const IslandType = {
+    ScreenShare: "screen-share",
+    Spotify: "spotify",
+    Voice: "voice"
+} as const;
+
+type IslandType = typeof IslandType[keyof typeof IslandType];
+
 const cl = classNameFactory("vc-illegalcord-dynamic-island-");
 const SETTINGS_KEYS = ["islandColor", "showSpotifyIsland", "showVoiceIsland", "showScreenShareIsland", "morphNotifications"] as const;
 const NOTIFICATION_DURATION = 5000;
+const SWIPE_MIN_DISTANCE = 48;
+const SWIPE_MIN_DURATION = 120;
 const settings = definePluginSettings({
     islandColor: {
         description: "Choose the Dynamic Island color.",
@@ -73,9 +93,9 @@ const settings = definePluginSettings({
         default: true
     },
     morphNotifications: {
-        description: "Temporarily morph the Dynamic Island for direct messages and mentions.",
+        description: "Temporarily morph the Dynamic Island for direct messages and mentions. (Broken)",
         type: OptionType.BOOLEAN,
-        default: true
+        default: false
     },
     showSpotifyPanel: {
         description: "Show the Spotify player in the Discord user panel.",
@@ -122,7 +142,7 @@ function ControlButton({ active, children, compact, danger, label, onClick }: Co
                 <Button
                     {...tooltipProps}
                     aria-label={label}
-                    className={cl("control", { active, compact, danger })}
+                    className={cl("control", { "control-active": active, "control-compact": compact, "control-danger": danger })}
                     size="iconOnly"
                     variant="none"
                     onClick={(event: MouseEvent<HTMLButtonElement>) => {
@@ -143,7 +163,7 @@ function ScreenShareTimer({ startedAt }: { startedAt: number; }) {
 
 function VoiceIcon({ children, slashed }: { children: ReactNode; slashed: boolean; }) {
     return (
-        <span className={cl("voice-icon", { slashed })}>
+        <span className={cl("voice-icon", { "voice-icon-slashed": slashed })}>
             {children}
             <span className={cl("slash")} />
         </span>
@@ -237,8 +257,11 @@ function ScreenShareSection({ startedAt, stream }: { startedAt: number; stream: 
 
 function DynamicIsland() {
     const [expanded, setExpanded] = useState(false);
-    const [notification, setNotification] = useState<IslandNotification | null>(null);
+    const [notifications, setNotifications] = useState<IslandNotification[]>([]);
+    const [primaryIsland, setPrimaryIsland] = useState<IslandType>(IslandType.ScreenShare);
     const [streamStartedAt, setStreamStartedAt] = useState(Date.now());
+    const swipeStartRef = useRef<SwipeStart | null>(null);
+    const suppressClickRef = useRef(false);
     const { islandColor, morphNotifications, showScreenShareIsland, showSpotifyIsland, showVoiceIsland } = settings.use(SETTINGS_KEYS);
     const spotifyTrack = useStateFromStores([SpotifyStore], () => SpotifyStore.device?.is_active ? SpotifyStore.track : null);
     const isPlaying = useStateFromStores([SpotifyStore], () => SpotifyStore.isPlaying);
@@ -249,7 +272,15 @@ function DynamicIsland() {
     const channelId = showVoiceIsland ? voiceState?.channelId : undefined;
     const stream = showScreenShareIsland ? activeStream : null;
     const streamKey = stream ? getStreamKey(stream) : null;
-    const isExpanded = expanded && !notification;
+    const activeIslands: IslandType[] = [];
+    if (stream) activeIslands.push(IslandType.ScreenShare);
+    if (track) activeIslands.push(IslandType.Spotify);
+    if (channelId) activeIslands.push(IslandType.Voice);
+    const primary = activeIslands.includes(primaryIsland) ? primaryIsland : activeIslands[0];
+    const primaryStream = primary === IslandType.ScreenShare ? stream : null;
+    const primaryTrack = primary === IslandType.Spotify ? track : null;
+    const primaryChannelId = primary === IslandType.Voice ? channelId : undefined;
+    const notification = notifications[0] ?? null;
     const idle = !track && !channelId && !stream;
 
     useEffect(() => {
@@ -258,91 +289,143 @@ function DynamicIsland() {
 
     useEffect(() => {
         if (!morphNotifications) {
-            setNotification(null);
+            setNotifications([]);
             return;
         }
 
-        let timeoutId: number | undefined;
-        const handleMessage = ({ message }: { message: Message; }) => {
+        const handleMessage = ({ message }: { message: MessageWithMentions; }) => {
             const channel = ChannelStore.getChannel(message.channel_id);
-            if (!channel || message.author.id === currentUser.id || message.blocked || channel.id === SelectedChannelStore.getChannelId()) return;
-            if (channel.guild_id && (UserGuildSettingsStore.isMuted(channel.guild_id) || UserGuildSettingsStore.isChannelMuted(channel.guild_id, channel.id))) return;
+            if (!channel || message.author.id === currentUser.id || message.blocked) return;
 
             const storedMessage = MessageStore.getMessage(message.channel_id, message.id);
-            if (channel.guild_id && !(storedMessage?.mentioned ?? message.mentioned)) return;
+            const directlyMentioned = message.mentions.some(mention => typeof mention === "string" ? mention === currentUser.id : mention.id === currentUser.id);
+            const memberRoles = channel.guild_id ? GuildMemberStore.getMember(channel.guild_id, currentUser.id)?.roles ?? [] : [];
+            const roleMentioned = channel.guild_id != null
+                && !UserGuildSettingsStore.isSuppressRolesEnabled(channel.guild_id)
+                && message.mentionRoles.some(roleId => memberRoles.includes(roleId));
+            const everyoneMentioned = channel.guild_id != null
+                && !UserGuildSettingsStore.isSuppressEveryoneEnabled(channel.guild_id)
+                && message.mentionEveryone;
+            const mentioned = storedMessage?.mentioned === true || message.mentioned === true || directlyMentioned || roleMentioned || everyoneMentioned;
+            if (channel.guild_id && !mentioned) return;
 
-            if (timeoutId !== undefined) clearTimeout(timeoutId);
-            setNotification({
+            const nextNotification = {
                 avatarUrl: IconUtils.getUserAvatarURL(message.author, false, 64),
                 body: message.content.trim() || (message.attachments.length ? "Sent an attachment." : "Sent a message."),
                 id: message.id,
                 title: message.author.globalName ?? message.author.username
-            });
-            timeoutId = window.setTimeout(() => setNotification(null), NOTIFICATION_DURATION);
+            };
+            setNotifications(queue => queue.some(item => item.id === message.id) || queue.length >= 10 ? queue : [...queue, nextNotification]);
         };
 
         FluxDispatcher.subscribe("MESSAGE_CREATE", handleMessage);
-        return () => {
-            FluxDispatcher.unsubscribe("MESSAGE_CREATE", handleMessage);
-            if (timeoutId !== undefined) clearTimeout(timeoutId);
-        };
+        return () => FluxDispatcher.unsubscribe("MESSAGE_CREATE", handleMessage);
     }, [currentUser.id, morphNotifications]);
 
+    useEffect(() => {
+        if (!notification) return;
+
+        const timeoutId = window.setTimeout(() => {
+            setNotifications(queue => queue[0]?.id === notification.id ? queue.slice(1) : queue);
+        }, NOTIFICATION_DURATION);
+        return () => clearTimeout(timeoutId);
+    }, [notification]);
+
     const activateSummary = () => {
-        if (notification) {
-            setNotification(null);
-            setExpanded(true);
+        if (suppressClickRef.current) {
+            suppressClickRef.current = false;
             return;
         }
 
+        setNotifications([]);
         setExpanded(value => !value);
     };
 
+    const cyclePrimary = (direction: 1 | -1) => {
+        if (activeIslands.length < 2 || !primary) return;
+
+        const currentIndex = activeIslands.indexOf(primary);
+        const nextIndex = (currentIndex + direction + activeIslands.length) % activeIslands.length;
+        setPrimaryIsland(activeIslands[nextIndex]);
+    };
+
+    const beginSwipe = (event: PointerEvent<HTMLDivElement>) => {
+        if (event.button !== 0) return;
+        swipeStartRef.current = {
+            pointerId: event.pointerId,
+            startedAt: Date.now(),
+            x: event.clientX,
+            y: event.clientY
+        };
+        suppressClickRef.current = false;
+        event.currentTarget.setPointerCapture(event.pointerId);
+    };
+
+    const finishSwipe = (event: PointerEvent<HTMLDivElement>) => {
+        const start = swipeStartRef.current;
+        swipeStartRef.current = null;
+        if (!start || start.pointerId !== event.pointerId) return;
+
+        const distanceX = event.clientX - start.x;
+        const distanceY = event.clientY - start.y;
+        if (Date.now() - start.startedAt < SWIPE_MIN_DURATION || Math.abs(distanceX) < SWIPE_MIN_DISTANCE || Math.abs(distanceX) <= Math.abs(distanceY)) return;
+
+        suppressClickRef.current = true;
+        cyclePrimary(distanceX > 0 ? 1 : -1);
+    };
+
     return (
-        <div className={cl("root", `color-${islandColor}`, { expanded: isExpanded, idle, notification: notification != null, playing: isPlaying && !stream, sharing: stream != null })}>
-            <div
+        <div className={cl("root", `color-${islandColor}`, {
+            "root-expanded": expanded,
+            "root-idle": idle,
+            "root-notification": notification != null,
+            "root-playing": isPlaying && primary === IslandType.Spotify,
+            "root-sharing": primary === IslandType.ScreenShare
+        })}>
+            <Clickable
                 className={cl("summary")}
-                role="button"
-                tabIndex={0}
-                aria-expanded={isExpanded}
+                aria-expanded={expanded}
                 aria-label="Illegalcord Dynamic Island"
                 onClick={activateSummary}
-                onKeyDown={event => {
-                    if (event.key !== "Enter" && event.key !== " ") return;
-                    event.preventDefault();
-                    activateSummary();
-                }}
+                onPointerCancel={() => { swipeStartRef.current = null; }}
+                onPointerDown={beginSwipe}
+                onPointerUp={finishSwipe}
             >
                 {notification
-                    ? <img key={notification.id} className={cl("notification-avatar")} src={notification.avatarUrl} alt="" />
-                    : stream
+                    ? <img key={notification.id} className={cl("notification-avatar")} src={notification.avatarUrl} alt="" draggable={false} />
+                    : primaryStream
                         ? <ScreenShareIcon className={cl("summary-icon", "stream-icon")} />
-                        : track
-                            ? <img key={track.album.image.url} className={cl("summary-cover")} src={track.album.image.url} alt="" draggable={false} />
+                        : primaryTrack
+                            ? <img key={primaryTrack.album.image.url} className={cl("summary-cover")} src={primaryTrack.album.image.url} alt="" draggable={false} />
                             : <IslandIcon className={cl("summary-icon")} />}
-                <div key={notification?.id ?? streamKey ?? track?.id ?? channelId ?? "idle"} className={cl("summary-copy")}>
-                    <strong>{notification?.title ?? (stream ? "You are sharing your screen" : track?.name ?? (channelId ? "Discord call" : "Illegalcord Dynamic Island"))}</strong>
-                    <span>{notification?.body ?? (stream
+                <div key={notification?.id ?? primary ?? "idle"} className={cl("summary-copy")}>
+                    <strong>{notification?.title ?? (primaryStream ? "You are sharing your screen" : primaryTrack?.name ?? (primaryChannelId ? "Discord call" : "Illegalcord Dynamic Island"))}</strong>
+                    <span>{notification?.body ?? (primaryStream
                         ? <>Live for <ScreenShareTimer startedAt={streamStartedAt} /></>
-                        : track
-                            ? track.artists.map(artist => artist.name).join(", ")
-                            : channelId ? "Call controls available" : "Ready for your activities")}</span>
+                        : primaryTrack
+                            ? primaryTrack.artists.map(artist => artist.name).join(", ")
+                            : primaryChannelId ? "Call controls available" : "Ready for your activities")}</span>
                 </div>
-                {!notification && !stream && track && (
+                {!notification && primaryTrack && (
                     <span className={cl("visualizer")} aria-label={isPlaying ? "Spotify playing" : "Spotify paused"}>
                         <span /><span /><span />
                     </span>
                 )}
-                {!notification && stream && (
-                    <ControlButton compact label="Stop sharing" danger onClick={() => stopScreenShare(stream)}>
+                {!notification && primaryStream && (
+                    <ControlButton compact label="Stop sharing" danger onClick={() => stopScreenShare(primaryStream)}>
                         <Glyph path="M7 7h10v10H7V7Z" />
                     </ControlButton>
                 )}
-                {!notification && !stream && channelId && <span className={cl("live-dot")} aria-label="Call active" />}
-                <span className={cl("beta")}>{notification ? "NEW" : "BETA"}</span>
-            </div>
+                {!notification && primaryChannelId && <span className={cl("live-dot")} aria-label="Call active" />}
+                {!notification && activeIslands.length > 1 && (
+                    <span className={cl("pages")} aria-label={`${activeIslands.length} active Islands`}>
+                        {activeIslands.map(type => <span key={type} className={cl("page", { "page-active": type === primary })} />)}
+                    </span>
+                )}
+                {notification && <span className={cl("notification-count")}>{notifications.length}</span>}
+            </Clickable>
             {notification && <span key={notification.id} className={cl("notification-progress")} />}
-            <div className={cl("panel-shell")} aria-hidden={!isExpanded}>
+            <div className={cl("panel-shell")} aria-hidden={!expanded}>
                 <div className={cl("panel-clip")}>
                     <div className={cl("panel")}>
                         {stream && <ScreenShareSection stream={stream} startedAt={streamStartedAt} />}
@@ -365,7 +448,7 @@ const SafeDynamicIsland = ErrorBoundary.wrap(DynamicIslandPortal, { noop: true }
 export default definePlugin({
     name: "IllegalcordDynamicIsland",
     description: "Adds a Dynamic Island for Spotify, calls, screen sharing, and notifications.",
-    authors: [EquicordDevs.irritably],
+    authors: [{ name: "irritably", id: 928787166916640838n }],
     tags: ["Media", "Voice"],
     dependencies: ["HeaderBarAPI", "MusicControls"],
     settings,

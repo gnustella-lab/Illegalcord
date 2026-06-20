@@ -7,7 +7,6 @@
 import "./style.css";
 
 import ErrorBoundary from "@components/ErrorBoundary";
-import { EquicordDevs } from "@utils/constants";
 import definePlugin from "@utils/types";
 
 import { hasSeenTutorial, resetTutorialSeen } from "./storage";
@@ -27,7 +26,7 @@ async function openFirstRunTutorial() {
 export default definePlugin({
     name: "IllegalcordTutorial",
     description: "Shows a first-run guided tutorial for Illegalcord features.",
-    authors: [EquicordDevs.irritably],
+    authors: [{ name: "irritably", id: 928787166916640838n }],
     required: true,
     enabledByDefault: true,
     settingsAboutComponent: SafeTutorialSettings,
