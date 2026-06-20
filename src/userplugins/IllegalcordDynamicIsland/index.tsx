@@ -88,7 +88,7 @@ function ControlButton({ active, children, danger, label, onClick }: ControlButt
 }
 
 function SpotifySection() {
-    const track = useStateFromStores([SpotifyStore], () => SpotifyStore.track);
+    const track = useStateFromStores([SpotifyStore], () => SpotifyStore.device?.is_active ? SpotifyStore.track : null);
     const isPlaying = useStateFromStores([SpotifyStore], () => SpotifyStore.isPlaying);
     if (!track) return null;
 
@@ -153,7 +153,7 @@ function VoiceSection({ channelId }: { channelId: string; }) {
 function DynamicIsland() {
     const [expanded, setExpanded] = useState(false);
     const { islandColor } = settings.use(SETTINGS_KEYS);
-    const track = useStateFromStores([SpotifyStore], () => SpotifyStore.track);
+    const track = useStateFromStores([SpotifyStore], () => SpotifyStore.device?.is_active ? SpotifyStore.track : null);
     const currentUser = UserStore.getCurrentUser();
     const voiceState = useStateFromStores([VoiceStateStore], () => VoiceStateStore.getVoiceStateForUser(currentUser.id));
     const channelId = voiceState?.channelId;

@@ -25,11 +25,11 @@
     -webkit-app-region: no-drag;
 }
 
-.vc-illegalcord-dynamic-island-root-color-transparent {
+.vc-illegalcord-dynamic-island-color-transparent {
     background: transparent;
 }
 
-.vc-illegalcord-dynamic-island-root-color-amoled {
+.vc-illegalcord-dynamic-island-color-amoled {
     --background-floating: #000;
     --background-mod-subtle: #111;
     --background-mod-strong: #1a1a1a;
@@ -43,7 +43,7 @@
     --interactive-hover: #fff;
 }
 
-.vc-illegalcord-dynamic-island-root-color-white {
+.vc-illegalcord-dynamic-island-color-white {
     --background-floating: #fff;
     --background-mod-subtle: #f2f3f5;
     --background-mod-strong: #e3e5e8;
@@ -57,7 +57,7 @@
     --interactive-hover: #111214;
 }
 
-.vc-illegalcord-dynamic-island-root-color-blue {
+.vc-illegalcord-dynamic-island-color-blue {
     --background-floating: #c9edff;
     --background-mod-subtle: #b8e5fb;
     --background-mod-strong: #a6dcf7;
@@ -71,7 +71,7 @@
     --interactive-hover: #092635;
 }
 
-.vc-illegalcord-dynamic-island-root-color-pink {
+.vc-illegalcord-dynamic-island-color-pink {
     --background-floating: #ffd6e9;
     --background-mod-subtle: #f8c6dd;
     --background-mod-strong: #efb4d0;
