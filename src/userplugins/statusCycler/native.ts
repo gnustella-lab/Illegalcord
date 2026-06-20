@@ -11,8 +11,13 @@ import type { IpcMainInvokeEvent } from "electron";
 
 export type InstallSpicetifyResult = { success: true; } | { success: false; error: string; };
 
-const WINDOWS_INSTALL_COMMAND = "iwr -useb https://raw.githubusercontent.com/spicetify/cli/main/install.ps1 | iex; Read-Host 'Press Enter to close'";
-const SHELL_INSTALL_COMMAND = "curl -fsSL https://raw.githubusercontent.com/spicetify/cli/main/install.sh | sh; printf '\\nPress Enter to close...'; read _";
+const WINDOWS_INSTALL_COMMAND = [
+    "$script = iwr -useb https://raw.githubusercontent.com/spicetify/cli/main/install.ps1",
+    "$script = $script -replace '(?m)^\\$choice = .*Spicetify Marketplace.*$', ([char]36 + \"choice = 0; Write-Host 'Automatically selected Y for Spicetify Marketplace.'\")",
+    "iex $script",
+    "Read-Host 'Press Enter to close'"
+].join("; ");
+const SHELL_INSTALL_COMMAND = "curl -fsSL https://raw.githubusercontent.com/spicetify/cli/main/install.sh | sed 's|read -r choice < /dev/tty|choice=Y|' | sh; printf '\\nPress Enter to close...'; read _";
 
 function launchTerminal(command: string, args: string[]) {
     return new Promise<boolean>(resolve => {

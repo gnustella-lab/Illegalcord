@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+import "./style.css";
+
 import { definePluginSettings } from "@api/Settings";
 import { getUserSettingLazy } from "@api/UserSettings";
 import { Button } from "@components/Button";
@@ -13,10 +15,11 @@ import { getLyricsLrclib } from "@equicordplugins/musicControls/spotify/lyrics/p
 import type { SyncedLyric } from "@equicordplugins/musicControls/spotify/lyrics/providers/types";
 import { EquicordDevs } from "@utils/constants";
 import { Logger } from "@utils/Logger";
-import definePlugin, { OptionType, type PluginNative } from "@utils/types";
+import definePlugin, { OptionType, type PluginNative, type PluginSettingComponentProps } from "@utils/types";
 import { chooseFile } from "@utils/web";
-import type { SpotifyTrack } from "@vencord/discord-types";
-import { Alerts, showToast, SpotifyStore, Toasts } from "@webpack/common";
+import type { Channel, SpotifyTrack } from "@vencord/discord-types";
+import { findComponentByCodeLazy } from "@webpack";
+import { Alerts, ChannelStore, Clickable, Popout, SelectedChannelStore, showToast, SpotifyStore, TextArea, Toasts, useRef, useState, useStateFromStores } from "@webpack/common";
 
 interface CustomStatusSetting {
     createdAtMs?: string;
@@ -32,10 +35,39 @@ interface SpotifyPlayerState {
     track: SpotifyTrack | null;
 }
 
+interface StatusEmoji {
+    emojiId: string;
+    emojiName: string;
+}
+
+interface EmojiSelectPayload {
+    animated?: boolean;
+    id?: string | null;
+    name?: string | null;
+    optionallyDiverseSequence?: string;
+}
+
+interface ReactionEmojiPickerProps {
+    channel?: Channel | null;
+    closePopout(): void;
+    onSelectEmoji(selection: {
+        emoji: EmojiSelectPayload | null;
+        willClose: boolean;
+    }): void;
+    pickerIntention: number;
+}
+
 const IMPORT_SETTING_KEYS: ("phrases" | "sourceFileName")[] = ["phrases", "sourceFileName"];
+const CUSTOM_EMOJI_REGEX = /^<a?:([\w-]+):(\d+)>$/;
+const EMOJI_INTENTION = { STATUS: 1 } as const;
 const logger = new Logger("StatusCycler");
 const CustomStatusSettings = getUserSettingLazy<CustomStatusSetting | null>("status", "customStatus");
 const Native = VencordNative?.pluginHelpers?.StatusCycler as PluginNative<typeof import("./native")> | undefined;
+const ReactionEmojiPicker = findComponentByCodeLazy<ReactionEmojiPickerProps>(
+    "showAddEmojiButton:",
+    "pickerIntention:",
+    "messageId:"
+);
 
 let active = false;
 let intervalId: ReturnType<typeof setInterval> | undefined;
@@ -54,6 +86,18 @@ function getPhrases(value = settings.store.phrases) {
     return value.split(/\r?\n|\r/).map(line => line.trim()).filter(Boolean);
 }
 
+function getEmojis(value = settings.store.emojis): StatusEmoji[] {
+    return value.split(/\r?\n|\r/).map(line => {
+        const emoji = line.trim();
+        const customEmoji = emoji.match(CUSTOM_EMOJI_REGEX);
+
+        return {
+            emojiId: customEmoji?.[2] ?? "0",
+            emojiName: customEmoji?.[1] ?? emoji
+        };
+    }).filter(emoji => emoji.emojiName);
+}
+
 function setNextSpotifyLyricsUpdate() {
     const delay = settings.plain.spotifyLyricsUpdateDelay * 1_000;
     const variation = settings.plain.humanizeSpotifyLyricsDelay ? Math.random() * delay * 0.35 : 0;
@@ -67,19 +111,33 @@ function restartSpotifyLyricsDelay() {
 
 function applyNextStatus() {
     const phrases = getPhrases();
-    if (!phrases.length || !CustomStatusSettings) return;
+    const emojis = getEmojis();
+    if ((!phrases.length && !emojis.length) || !CustomStatusSettings) return;
 
     const current = CustomStatusSettings.getSetting();
-    const nextIndex = (settings.store.nextIndex ?? 0) % phrases.length;
-    const text = phrases[nextIndex];
-    settings.store.nextIndex = (nextIndex + 1) % phrases.length;
+    let text = current?.text ?? "";
+    let emojiId = current?.emojiId ?? "0";
+    let emojiName = current?.emojiName ?? "";
+
+    if (phrases.length) {
+        const nextIndex = (settings.store.nextIndex ?? 0) % phrases.length;
+        text = phrases[nextIndex];
+        settings.store.nextIndex = (nextIndex + 1) % phrases.length;
+    }
+
+    if (emojis.length) {
+        const nextEmojiIndex = (settings.store.nextEmojiIndex ?? 0) % emojis.length;
+        ({ emojiId, emojiName } = emojis[nextEmojiIndex]);
+        settings.store.nextEmojiIndex = (nextEmojiIndex + 1) % emojis.length;
+    }
+
     setNextSpotifyLyricsUpdate();
 
     void CustomStatusSettings.updateSetting({
         text,
         expiresAtMs: "0",
-        emojiId: current?.emojiId ?? "0",
-        emojiName: current?.emojiName ?? "",
+        emojiId,
+        emojiName,
         createdAtMs: String(Date.now())
     }).catch(error => logger.error("Could not update the custom status.", error));
 }
@@ -107,14 +165,24 @@ function scheduleSpotifyLyric() {
         }
 
         const current = CustomStatusSettings.getSetting();
+        let emojiId = current?.emojiId ?? "0";
+        let emojiName = current?.emojiName ?? "";
+        const emojis = getEmojis();
+
+        if (emojis.length) {
+            const nextEmojiIndex = (settings.store.nextEmojiIndex ?? 0) % emojis.length;
+            ({ emojiId, emojiName } = emojis[nextEmojiIndex]);
+            settings.store.nextEmojiIndex = (nextEmojiIndex + 1) % emojis.length;
+        }
+
         lastLyricText = text;
         setNextSpotifyLyricsUpdate();
 
         void CustomStatusSettings.updateSetting({
             text: text.slice(0, 128),
             expiresAtMs: "0",
-            emojiId: current?.emojiId ?? "0",
-            emojiName: current?.emojiName ?? "",
+            emojiId,
+            emojiName,
             createdAtMs: String(Date.now())
         }).catch(error => logger.error("Could not update the custom status with Spotify lyrics.", error));
     }
@@ -219,7 +287,7 @@ function restartRotation() {
     if (intervalId !== undefined) clearInterval(intervalId);
     intervalId = undefined;
 
-    if (!getPhrases().length) return;
+    if (!getPhrases().length && !getEmojis().length) return;
 
     applyNextStatus();
     intervalId = setInterval(applyNextStatus, settings.store.rotationInterval * 1_000);
@@ -228,6 +296,11 @@ function restartRotation() {
 function restartWithFirstPhrase() {
     settings.store.nextIndex = 0;
     settings.store.sourceFileName = undefined;
+    restartRotation();
+}
+
+function restartWithFirstEmoji() {
+    settings.store.nextEmojiIndex = 0;
     restartRotation();
 }
 
@@ -269,10 +342,72 @@ function ImportSetting() {
 
 const SafeImportSetting = ErrorBoundary.wrap(ImportSetting, { noop: true });
 
+function EmojiSetting({ setValue }: PluginSettingComponentProps) {
+    const [emojis, setEmojis] = useState(settings.store.emojis);
+    const triggerRef = useRef<HTMLDivElement>(null);
+    const channel = useStateFromStores([SelectedChannelStore, ChannelStore], () => {
+        const channelId = SelectedChannelStore.getChannelId();
+        return channelId ? ChannelStore.getChannel(channelId) : null;
+    });
+
+    return (
+        <Flex flexDirection="column" gap="8px">
+            <span>Status emojis, one per line. Unicode, custom and animated Discord emojis are supported.</span>
+            <Flex alignItems="center" gap="8px">
+                <TextArea
+                    value={emojis}
+                    placeholder={"😀\n<:custom:123456789012345678>\n<a:animated:123456789012345678>"}
+                    onChange={value => {
+                        setEmojis(value);
+                        setValue(value);
+                    }}
+                />
+                <Popout
+                    position="bottom"
+                    align="right"
+                    targetElementRef={triggerRef}
+                    renderPopout={({ closePopout }) => (
+                        <ReactionEmojiPicker
+                            channel={channel}
+                            closePopout={closePopout}
+                            pickerIntention={EMOJI_INTENTION.STATUS}
+                            onSelectEmoji={({ emoji, willClose }) => {
+                                const selectedEmoji = emoji?.id && emoji.name
+                                    ? `<${emoji.animated ? "a" : ""}:${emoji.name}:${emoji.id}>`
+                                    : emoji?.optionallyDiverseSequence?.trim() || emoji?.name?.trim();
+
+                                if (selectedEmoji) {
+                                    const nextEmojis = [...emojis.split(/\r?\n|\r/).map(line => line.trim()).filter(Boolean), selectedEmoji].join("\n");
+                                    setEmojis(nextEmojis);
+                                    setValue(nextEmojis);
+                                }
+                                if (willClose) closePopout();
+                            }}
+                        />
+                    )}
+                >
+                    {popoutProps => (
+                        <div {...popoutProps} ref={triggerRef}>
+                            <Clickable
+                                aria-label="Add emoji from Discord"
+                                className="vc-status-cycler-emoji-button"
+                            >
+                                🤓
+                            </Clickable>
+                        </div>
+                    )}
+                </Popout>
+            </Flex>
+        </Flex>
+    );
+}
+
+const SafeEmojiSetting = ErrorBoundary.wrap(EmojiSetting, { noop: true });
+
 function SpicetifyInstallerSetting() {
     const confirmInstall = () => Alerts.show({
         title: "Install Spicetify?",
-        body: "This downloads and runs the official Spicetify installer from GitHub in a terminal. Review its prompts before continuing.",
+        body: "This downloads and runs the official Spicetify installer from GitHub in a terminal. Spicetify Marketplace will be selected automatically.",
         confirmText: "Install",
         cancelText: "Cancel",
         onConfirm: () => {
@@ -312,6 +447,12 @@ const settings = definePluginSettings({
         },
         onChange: restartWithFirstPhrase
     },
+    emojis: {
+        type: OptionType.COMPONENT,
+        component: SafeEmojiSetting,
+        default: "",
+        onChange: restartWithFirstEmoji
+    },
     rotationInterval: {
         type: OptionType.NUMBER,
         description: "Seconds between each custom status change.",
@@ -340,7 +481,7 @@ const settings = definePluginSettings({
     },
     spicetifyInstaller: {
         type: OptionType.COMPONENT,
-        description: "Spicetify modifies the Spotify desktop client and adds support for themes, extensions, and custom apps.",
+        description: "Spicetify modifies the Spotify desktop client and adds support for themes, extensions, and custom apps. Marketplace is installed automatically.",
         component: SafeSpicetifyInstallerSetting
     },
     importFile: {
@@ -349,13 +490,14 @@ const settings = definePluginSettings({
         component: SafeImportSetting
     }
 }).withPrivateSettings<{
+    nextEmojiIndex?: number;
     nextIndex?: number;
     sourceFileName?: string;
 }>();
 
 export default definePlugin({
     name: "StatusCycler",
-    description: "Automatically rotates through custom status phrases at a configurable interval.",
+    description: "Automatically rotates through custom status phrases and emojis at a configurable interval.",
     authors: [EquicordDevs.irritably],
     tags: ["Activity", "Utility"],
     dependencies: ["UserSettingsAPI"],
