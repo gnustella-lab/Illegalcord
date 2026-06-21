@@ -40,7 +40,18 @@ interface IslandNotification {
     title: string;
 }
 
-interface MessageWithMentions extends Omit<Message, "mentions"> {
+interface DynamicIslandRuntime {
+    activeModule: symbol;
+    notification: IslandNotification | null;
+    notificationListeners: Set<() => void>;
+    notificationTimeoutId: number | undefined;
+    owner: symbol | null;
+    portalListeners: Set<() => void>;
+}
+
+interface MessageWithMentions extends Omit<Message, "mentionEveryone" | "mentionRoles" | "mentions"> {
+    mention_everyone: boolean;
+    mention_roles: string[];
     mentions: Array<string | { id: string; }>;
 }
 
@@ -60,10 +71,23 @@ const IslandType = {
 type IslandType = typeof IslandType[keyof typeof IslandType];
 
 const cl = classNameFactory("vc-illegalcord-dynamic-island-");
-const SETTINGS_KEYS = ["islandColor", "showSpotifyIsland", "showVoiceIsland", "showScreenShareIsland", "morphNotifications"] as const;
 const NOTIFICATION_DURATION = 5000;
+const RUNTIME_KEY = Symbol.for("IllegalcordDynamicIsland.runtime");
 const SWIPE_MIN_DISTANCE = 48;
 const SWIPE_MIN_DURATION = 120;
+const portalModule = Symbol();
+const runtime = (Reflect.get(globalThis, RUNTIME_KEY) as DynamicIslandRuntime | undefined) ?? {
+    activeModule: portalModule,
+    notification: null,
+    notificationListeners: new Set(),
+    notificationTimeoutId: undefined,
+    owner: null,
+    portalListeners: new Set()
+};
+runtime.activeModule = portalModule;
+runtime.owner = null;
+Reflect.set(globalThis, RUNTIME_KEY, runtime);
+runtime.portalListeners.forEach(listener => listener());
 const settings = definePluginSettings({
     islandColor: {
         description: "Choose the Dynamic Island color.",
@@ -93,7 +117,7 @@ const settings = definePluginSettings({
         default: true
     },
     morphNotifications: {
-        description: "Temporarily morph the Dynamic Island for direct messages and mentions. (Broken)",
+        description: "Temporarily morph the Dynamic Island for direct messages and mentions.",
         type: OptionType.BOOLEAN,
         default: false
     },
@@ -104,6 +128,16 @@ const settings = definePluginSettings({
         onChange: value => { musicControlsSettings.store.showSpotifyControls = value; }
     }
 });
+const SETTINGS_KEYS = ["islandColor", "showSpotifyIsland", "showVoiceIsland", "showScreenShareIsland", "morphNotifications"] satisfies Array<keyof typeof settings.store>;
+
+function setIslandNotification(notification: IslandNotification | null) {
+    if (runtime.notificationTimeoutId !== undefined) clearTimeout(runtime.notificationTimeoutId);
+    runtime.notification = notification;
+    runtime.notificationTimeoutId = notification
+        ? window.setTimeout(() => setIslandNotification(null), NOTIFICATION_DURATION)
+        : undefined;
+    runtime.notificationListeners.forEach(listener => listener());
+}
 
 function Glyph({ path, size: _, ...props }: IconProps & { path: string; }) {
     return (
@@ -149,6 +183,7 @@ function ControlButton({ active, children, compact, danger, label, onClick }: Co
                         event.stopPropagation();
                         onClick();
                     }}
+                    onPointerDown={event => event.stopPropagation()}
                 >
                     {children}
                 </Button>
@@ -257,7 +292,7 @@ function ScreenShareSection({ startedAt, stream }: { startedAt: number; stream: 
 
 function DynamicIsland() {
     const [expanded, setExpanded] = useState(false);
-    const [notifications, setNotifications] = useState<IslandNotification[]>([]);
+    const [notification, setNotification] = useState(runtime.notification);
     const [primaryIsland, setPrimaryIsland] = useState<IslandType>(IslandType.ScreenShare);
     const [streamStartedAt, setStreamStartedAt] = useState(Date.now());
     const swipeStartRef = useRef<SwipeStart | null>(null);
@@ -280,7 +315,6 @@ function DynamicIsland() {
     const primaryStream = primary === IslandType.ScreenShare ? stream : null;
     const primaryTrack = primary === IslandType.Spotify ? track : null;
     const primaryChannelId = primary === IslandType.Voice ? channelId : undefined;
-    const notification = notifications[0] ?? null;
     const idle = !track && !channelId && !stream;
 
     useEffect(() => {
@@ -288,48 +322,46 @@ function DynamicIsland() {
     }, [streamKey]);
 
     useEffect(() => {
+        const updateNotification = () => setNotification(runtime.notification);
+        runtime.notificationListeners.add(updateNotification);
+        updateNotification();
+        return () => { runtime.notificationListeners.delete(updateNotification); };
+    }, []);
+
+    useEffect(() => {
         if (!morphNotifications) {
-            setNotifications([]);
+            setIslandNotification(null);
             return;
         }
 
         const handleMessage = ({ message }: { message: MessageWithMentions; }) => {
             const channel = ChannelStore.getChannel(message.channel_id);
-            if (!channel || message.author.id === currentUser.id || message.blocked) return;
-
             const storedMessage = MessageStore.getMessage(message.channel_id, message.id);
+            if (!channel || message.author.id === currentUser.id || storedMessage?.blocked) return;
+
             const directlyMentioned = message.mentions.some(mention => typeof mention === "string" ? mention === currentUser.id : mention.id === currentUser.id);
             const memberRoles = channel.guild_id ? GuildMemberStore.getMember(channel.guild_id, currentUser.id)?.roles ?? [] : [];
             const roleMentioned = channel.guild_id != null
                 && !UserGuildSettingsStore.isSuppressRolesEnabled(channel.guild_id)
-                && message.mentionRoles.some(roleId => memberRoles.includes(roleId));
+                && message.mention_roles.some(roleId => memberRoles.includes(roleId));
             const everyoneMentioned = channel.guild_id != null
                 && !UserGuildSettingsStore.isSuppressEveryoneEnabled(channel.guild_id)
-                && message.mentionEveryone;
-            const mentioned = storedMessage?.mentioned === true || message.mentioned === true || directlyMentioned || roleMentioned || everyoneMentioned;
+                && message.mention_everyone;
+            const mentioned = storedMessage?.mentioned === true || directlyMentioned || roleMentioned || everyoneMentioned;
             if (channel.guild_id && !mentioned) return;
 
-            const nextNotification = {
-                avatarUrl: IconUtils.getUserAvatarURL(message.author, false, 64),
+            const author = UserStore.getUser(message.author.id) ?? message.author;
+            setIslandNotification({
+                avatarUrl: IconUtils.getUserAvatarURL(author, false, 64),
                 body: message.content.trim() || (message.attachments.length ? "Sent an attachment." : "Sent a message."),
                 id: message.id,
-                title: message.author.globalName ?? message.author.username
-            };
-            setNotifications(queue => queue.some(item => item.id === message.id) || queue.length >= 10 ? queue : [...queue, nextNotification]);
+                title: author.globalName ?? author.username
+            });
         };
 
         FluxDispatcher.subscribe("MESSAGE_CREATE", handleMessage);
         return () => FluxDispatcher.unsubscribe("MESSAGE_CREATE", handleMessage);
     }, [currentUser.id, morphNotifications]);
-
-    useEffect(() => {
-        if (!notification) return;
-
-        const timeoutId = window.setTimeout(() => {
-            setNotifications(queue => queue[0]?.id === notification.id ? queue.slice(1) : queue);
-        }, NOTIFICATION_DURATION);
-        return () => clearTimeout(timeoutId);
-    }, [notification]);
 
     const activateSummary = () => {
         if (suppressClickRef.current) {
@@ -337,7 +369,7 @@ function DynamicIsland() {
             return;
         }
 
-        setNotifications([]);
+        setIslandNotification(null);
         setExpanded(value => !value);
     };
 
@@ -422,7 +454,6 @@ function DynamicIsland() {
                         {activeIslands.map(type => <span key={type} className={cl("page", { "page-active": type === primary })} />)}
                     </span>
                 )}
-                {notification && <span className={cl("notification-count")}>{notifications.length}</span>}
             </Clickable>
             {notification && <span key={notification.id} className={cl("notification-progress")} />}
             <div className={cl("panel-shell")} aria-hidden={!expanded}>
@@ -440,7 +471,28 @@ function DynamicIsland() {
 }
 
 function DynamicIslandPortal() {
-    return ReactDOM.createPortal(<DynamicIsland />, document.body);
+    const owner = useRef(Symbol()).current;
+    const [, forceUpdate] = useState(0);
+
+    useEffect(() => {
+        const syncPortal = () => {
+            if (runtime.activeModule === portalModule && runtime.owner == null) runtime.owner = owner;
+            forceUpdate(value => value + 1);
+        };
+
+        runtime.portalListeners.add(syncPortal);
+        syncPortal();
+        return () => {
+            runtime.portalListeners.delete(syncPortal);
+            if (runtime.owner !== owner) return;
+            runtime.owner = null;
+            runtime.portalListeners.forEach(listener => listener());
+        };
+    }, [owner]);
+
+    return runtime.activeModule === portalModule && runtime.owner === owner
+        ? ReactDOM.createPortal(<DynamicIsland />, document.body)
+        : null;
 }
 
 const SafeDynamicIsland = ErrorBoundary.wrap(DynamicIslandPortal, { noop: true });
@@ -455,6 +507,10 @@ export default definePlugin({
 
     start() {
         musicControlsSettings.store.showSpotifyControls = settings.store.showSpotifyPanel;
+    },
+
+    stop() {
+        setIslandNotification(null);
     },
 
     headerBarButton: {
