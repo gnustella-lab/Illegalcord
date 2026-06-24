@@ -160,16 +160,22 @@ function isCurrentSpotifyUpdate(update: NonNullable<StatusUpdate["spotify"]>, te
 }
 
 function updateStatus(update: StatusUpdate) {
-    pendingStatusUpdate = update;
-    if (statusUpdateInFlight || !CustomStatusSettings) return;
+    if (statusUpdateInFlight || !CustomStatusSettings) {
+        pendingStatusUpdate = update;
+        return;
+    }
+
+    if (update.spotify && !isCurrentSpotifyUpdate(update.spotify, update.value.text)) {
+        if (pendingStatusUpdate) {
+            const next = pendingStatusUpdate;
+            pendingStatusUpdate = undefined;
+            updateStatus(next);
+        }
+        return;
+    }
 
     statusUpdateInFlight = true;
     pendingStatusUpdate = undefined;
-
-    if (update.spotify && !isCurrentSpotifyUpdate(update.spotify, update.value.text)) {
-        statusUpdateInFlight = false;
-        return;
-    }
 
     if (update.spotify) lastSpotifyLyricIndex = update.spotify.lyricIndex;
 
@@ -652,6 +658,8 @@ export default definePlugin({
         pendingSpotifyBackwardLyricIndex = undefined;
         spotifyBackwardConfirmations = 0;
         pendingStatusUpdate = undefined;
+        spotifyLyrics = [];
+        spotifyLyricsTrackId = undefined;
         if (intervalId !== undefined) {
             clearInterval(intervalId);
             intervalId = undefined;
