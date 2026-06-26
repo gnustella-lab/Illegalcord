@@ -355,6 +355,8 @@ function sendMsgNotif(titleString: string, content: string, message: Message) {
                 audioPath: settings.store.soundPath,
                 title: titleString,
                 content: content,
+                useBase64Icon: false,
+                icon: "default",
                 sourceApp: "Vencord"
             });
         });
